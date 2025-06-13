@@ -9,6 +9,9 @@ venv/
 
 # Alembic migration files (optional)
 alembic/versions/
+alembic/
+alembic.ini
+
 
 # System files
 .DS_Store
@@ -16,3 +19,5 @@ alembic/versions/
 # IDE junk
 .vscode/
 .idea/
+
+uploaded_docs/
