@@ -37,6 +37,7 @@ from health_routes import router as health_router
 from document_routes import router as document_router
 from repayment_routes import router as repayment_router
 from emi_worker import run_worker
+from wallet_routes import wallet_router
 
 
 # Shared dependencies and utils
@@ -243,3 +244,4 @@ app.include_router(audit_router)
 app.include_router(health_router)
 app.include_router(document_router)
 app.include_router(repayment_router)
+app.include_router(wallet_router)

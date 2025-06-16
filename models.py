@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Boolean, ForeignKey, DateTime,
-    Numeric, Text, Float, Date
+    Numeric, Text, Float, Date, func
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
@@ -210,6 +210,7 @@ class AuditAction(str, enum.Enum):
     LOAN_SEARCHED = "loan_searched"
     EMAIL_VERIFIED = "email_verified"
     MANDATE_FAILED = "mandate_failed"
+    WALLET_TOPUP = "wallet_topup"
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
@@ -251,14 +252,6 @@ class PaymentRetryLog(Base):
     notes = Column(Text, nullable=True)
     payment = relationship("Payment")
 
-class Wallet(Base):
-    __tablename__ = "wallets"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
-    balance = Column(Numeric(precision=12, scale=2), default=0)
-    user = relationship("User", back_populates="wallet")
-    transactions = relationship("WalletTransaction", back_populates="wallet", cascade="all, delete-orphan")
-
 class WalletTransaction(Base):
     __tablename__ = "wallet_transactions"
     id = Column(Integer, primary_key=True, index=True)
@@ -269,3 +262,15 @@ class WalletTransaction(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     status = Column(transaction_status_enum, nullable=False)
     wallet = relationship("Wallet", back_populates="transactions")
+
+
+class Wallet(Base):
+    __tablename__ = "wallets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
+    balance = Column(Numeric(precision=12, scale=2), default=0)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    user = relationship("User", back_populates="wallet")
+    transactions = relationship("WalletTransaction", back_populates="wallet", cascade="all, delete-orphan")

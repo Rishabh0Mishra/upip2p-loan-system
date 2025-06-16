@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 import models, schemas
 from dependencies import get_db, require_roles
@@ -7,7 +8,7 @@ import crud_loan
 from audit import log_action
 from models import AuditAction
 from dependencies import get_current_user
-
+from emi_scheduler import create_repayment_schedule  # Make sure this is correct
 
 lender_router = APIRouter(prefix="/lender", tags=["lender"])
 
@@ -54,19 +55,17 @@ def get_pending_loan_requests(
         models.Loan.status == models.LoanStatus.pending
     ).all()
     return loans
-    
+
 @lender_router.post("/loan-requests/{loan_id}/accept", response_model=schemas.LoanResponse)
 def accept_loan_request(
     loan_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles(["lender"]))
 ):
-    
-    """Accept a pending loan request"""
+    """Accept a pending loan request, activate it, and create repayment schedule"""
     loan = crud_loan.get_loan(db, loan_id)
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
-
 
     if loan.lender_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to respond to this loan")
@@ -74,27 +73,42 @@ def accept_loan_request(
     if loan.status != models.LoanStatus.pending:
         raise HTTPException(status_code=400, detail="Loan is not in pending status")
 
-    # Accept the loan - make it active
-    loan = crud_loan.update_loan_status(
-        db, 
-        loan_id, 
-        models.LoanStatus.active,
-        models.LoanSubStatus.none
-    )
-    
+    try:
+        # Transition to active
+        loan = crud_loan.update_loan_status(
+            db,
+            loan_id,
+            models.LoanStatus.active,
+            models.LoanSubStatus.none
+        )
 
-    log_action(
-        db,
-        user_id=current_user.id,
-        action=AuditAction.LOAN_STATUS_UPDATED,
-        description=f"Loan #{loan.id} accepted by lender and is now active"
-    )
-    print("Loan ID:", loan.id)
-    print("Loan Status from DB:", loan.status)
-    print("Loan Status Enum Match:", loan.status == models.LoanStatus.active)
+        # Create EMI schedule
+        create_repayment_schedule(db, loan)
 
-    return loan
+        log_action(
+            db,
+            user_id=current_user.id,
+            action=AuditAction.LOAN_STATUS_UPDATED,
+            description=f"Loan #{loan.id} accepted by lender and EMI schedule created"
+        )
 
+        return loan
+
+    except (SQLAlchemyError, Exception) as e:
+        db.rollback()
+
+        # Revert loan status to pending if EMI schedule fails
+        crud_loan.update_loan_status(
+            db,
+            loan_id,
+            models.LoanStatus.pending,
+            models.LoanSubStatus.none
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Loan activation failed: {str(e)}"
+        )
 
 @lender_router.post("/loan-requests/{loan_id}/reject", response_model=schemas.LoanResponse)
 def reject_loan_request(
@@ -115,8 +129,8 @@ def reject_loan_request(
 
     # Reject the loan - cancel it
     loan = crud_loan.update_loan_status(
-        db, 
-        loan_id, 
+        db,
+        loan_id,
         models.LoanStatus.cancelled,
         models.LoanSubStatus.none
     )
@@ -160,8 +174,8 @@ def mark_loan_completed(
         raise HTTPException(status_code=400, detail="Can only complete active loans")
 
     loan = crud_loan.update_loan_status(
-        db, 
-        loan_id, 
+        db,
+        loan_id,
         models.LoanStatus.completed,
         models.LoanSubStatus.none
     )

@@ -231,6 +231,7 @@ class BorrowerDashboard(BaseModel):
     total_borrowed: Decimal
     total_repaid: Decimal
     next_payment_due: Optional[PaymentResponse]
+    wallet_balance: Decimal 
 
 class LenderDashboard(BaseModel):
     active_loans: List[LoanResponse]
@@ -239,6 +240,29 @@ class LenderDashboard(BaseModel):
     total_lent: Decimal
     total_collected: Decimal
     overdue_payments: List[PaymentResponse]
+    wallet_balance: Decimal 
+    
+
+# ==== WALLETS ====
+
+class WalletCreate(BaseModel):
+    user_id: int
+    initial_balance: float = Field(..., ge=0)
+
+class WalletUpdate(BaseModel):
+    amount: float  # positive or negative
+
+class WalletResponse(BaseModel):
+    id: int
+    user_id: int
+    balance: float
+
+    class Config:
+        from_attributes = True
+    
+class WalletTopUpRequest(BaseModel):
+    amount: float
+    
 
 # ==== SEARCH ====
 

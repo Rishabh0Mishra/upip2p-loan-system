@@ -60,10 +60,11 @@ def create_loan(db: Session, loan: schemas.LoanCreate):
     db.commit()
     db.refresh(db_loan)
 
-    invalidate_cache("get_loans_by_user")  # Don't pass user_id here, your function doesn't accept it
+    # 🔥 Invalidate both lender and borrower cache entries
+    invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
+    invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
 
     return db_loan
-
 
 
 @cache_result(expiration=1800)
@@ -72,7 +73,7 @@ def get_loan_with_details(db: Session, loan_id: int):
         .options(
             joinedload(models.Loan.lender),
             joinedload(models.Loan.borrower),
-            joinedload(models.Loan.payments)  # <-- include payments
+            joinedload(models.Loan.payments)
         )\
         .filter(models.Loan.id == loan_id)\
         .first()
@@ -134,8 +135,9 @@ def update_loan_status(db: Session, loan_id: int, new_status: models.LoanStatus,
     db.commit()
     db.refresh(loan)
 
-    invalidate_cache("get_loans_by_user", user_id=loan.lender_id)
-    invalidate_cache("get_loans_by_user", user_id=loan.borrower_id)
+    # 🔥 Invalidate both lender and borrower cache entries
+    invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
+    invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
 
     return loan
 
