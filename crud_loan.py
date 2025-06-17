@@ -4,8 +4,15 @@ from fastapi import HTTPException
 import models
 import schemas
 from config import settings
-
+from audit import log_action
+from exceptions import InsufficientFundsException
+from models import AuditAction
 from cache import cache_result, invalidate_cache
+from typing import Optional
+from datetime import datetime, timedelta
+import pytz
+
+IST = pytz.timezone("Asia/Kolkata")
 
 
 def validate_loan_data(loan: schemas.LoanCreate):
@@ -24,6 +31,11 @@ def validate_loan_data(loan: schemas.LoanCreate):
             status_code=400,
             detail="Cannot create a loan to yourself"
         )
+    if not (0 <= loan.interest_rate <= 0.5):
+        raise HTTPException(
+            status_code=400,
+            detail="Interest rate must be between 0% and 50%"
+        )
 
 
 def validate_users_exist(db: Session, lender_id: int, borrower_id: int):
@@ -36,9 +48,36 @@ def validate_users_exist(db: Session, lender_id: int, borrower_id: int):
     return lender, borrower
 
 
+def get_wallet(db: Session, user_id: int):
+    wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user_id).first()
+    if not wallet:
+        wallet = models.Wallet(user_id=user_id, balance=Decimal("0.00"))
+        db.add(wallet)
+        db.commit()
+        db.refresh(wallet)
+    return wallet
+
+
 def create_loan(db: Session, loan: schemas.LoanCreate):
     validate_loan_data(loan)
     lender, borrower = validate_users_exist(db, loan.lender_id, loan.borrower_id)
+
+    freq_delta = {
+        "every_10_seconds": timedelta(seconds=10),
+        "every_30_seconds": timedelta(seconds=30),
+        "minutely": timedelta(minutes=1),
+        "every_5_minutes": timedelta(minutes=5),
+        "hourly": timedelta(hours=1),
+        "daily": timedelta(days=1),
+        "weekly": timedelta(weeks=1),
+        "bi_weekly": timedelta(weeks=2),
+        "monthly": timedelta(days=30),
+        "quarterly": timedelta(days=90),
+        "one_time": timedelta(days=0),
+    }.get(loan.payment_frequency.lower(), timedelta(days=30))
+
+    start_date = datetime.now(IST)
+    due_date = start_date + (freq_delta * loan.number_of_payments)
 
     db_loan = models.Loan(
         lender_id=loan.lender_id,
@@ -47,11 +86,9 @@ def create_loan(db: Session, loan: schemas.LoanCreate):
         interest_rate=Decimal(str(loan.interest_rate)),
         payment_frequency=loan.payment_frequency,
         number_of_payments=loan.number_of_payments,
-        payment_amount=Decimal(str(loan.payment_amount)),
-        total_amount=Decimal(str(loan.total_amount)),
         description=loan.description,
-        start_date=loan.start_date,
-        due_date=loan.due_date,
+        start_date=start_date,
+        due_date=due_date,
         status=models.LoanStatus.pending,
         sub_status=models.LoanSubStatus.none
     )
@@ -60,9 +97,16 @@ def create_loan(db: Session, loan: schemas.LoanCreate):
     db.commit()
     db.refresh(db_loan)
 
-    # 🔥 Invalidate both lender and borrower cache entries
     invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
     invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
+
+    log_action(
+        db=db,
+        user_id=loan.borrower_id,
+        action=AuditAction.LOAN_CREATED,
+        description=f"Loan request #{db_loan.id} created by borrower",
+        loan_id=db_loan.id
+    )
 
     return db_loan
 
@@ -135,7 +179,6 @@ def update_loan_status(db: Session, loan_id: int, new_status: models.LoanStatus,
     db.commit()
     db.refresh(loan)
 
-    # 🔥 Invalidate both lender and borrower cache entries
     invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
     invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
 

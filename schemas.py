@@ -135,16 +135,8 @@ class LoanBase(BaseModel):
     description: Optional[str] = None
 
 class LoanCreate(LoanBase):
-    total_amount: Decimal = Field(..., gt=0)
-    payment_amount: Decimal = Field(..., gt=0)
-    start_date: datetime
-    due_date: datetime
-
-    @validator('due_date')
-    def check_due_after_start(cls, due_date, values):
-        if 'start_date' in values and due_date <= values['start_date']:
-            raise ValueError("Due date must be after start date")
-        return due_date
+    total_amount: Optional[Decimal] = None
+    payment_amount: Optional[Decimal] = None
 
 class LoanUpdate(BaseModel):
     status: Optional[LoanStatus] = None
@@ -183,13 +175,13 @@ class PaymentResponse(BaseModel):
     amount: Decimal
     status: PaymentStatus
     due_date: date
-    paid_date: Optional[date]
-    payment_method: Optional[str]
-    transaction_id: Optional[str]
-    principal_portion: Decimal
-    interest_portion: Decimal
-    late_fee: Decimal
-    notes: Optional[str]
+    paid_date: Optional[date] = None
+    payment_method: Optional[str] = None
+    transaction_id: Optional[str] = None
+    principal_portion: Optional[Decimal] = None
+    interest_portion: Optional[Decimal] = None
+    late_fee: Optional[Decimal] = None
+    notes: Optional[str] = None
     created_at: datetime
 
     class Config:

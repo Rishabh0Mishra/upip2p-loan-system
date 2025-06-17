@@ -80,6 +80,17 @@ def update_loan_status(
         raise HTTPException(status_code=403, detail="Not authorized to update this loan")
 
     if loan_update.status:
+        # Check lender balance and transfer funds if activating the loan
+        if loan_update.status == "active":
+            lender_balance = get_wallet_balance(loan.lender_id)
+            if lender_balance < loan.principal_amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Lender has insufficient funds to activate the loan"
+                )
+            update_wallet_balance(loan.lender_id, -loan.principal_amount)
+            update_wallet_balance(loan.borrower_id, loan.principal_amount)
+
         loan = crud_loan.update_loan_status(db, loan_id, loan_update.status)
         NotificationService(db).send_loan_approved_notification(loan) if loan_update.status == "approved" \
             else NotificationService(db).send_loan_rejected_notification(loan)
@@ -87,47 +98,48 @@ def update_loan_status(
         if loan_update.status == "active":
             db.commit()
             db.refresh(loan)
-# ------- CREATE REPAYMENT SCHEDULE -------
+
     if loan.status == "active":
-        principal = loan.principal_amount
-        rate = loan.interest_rate or 0.0
-        n = loan.number_of_payments
+        existing_payments = db.query(models.Payment).filter(models.Payment.loan_id == loan.id).count()
+        if existing_payments == 0:
+            principal = loan.principal_amount
+            rate = loan.interest_rate or 0.0
+            n = loan.number_of_payments
 
-    # ⏱️ Flexible frequency intervals
-    freq_delta = {
-        "every_10_seconds": timedelta(seconds=10),
-        "every_30_seconds": timedelta(seconds=30),
-        "minutely": timedelta(minutes=1),
-        "every_5_minutes": timedelta(minutes=5),
-        "hourly": timedelta(hours=1),
-        "daily": timedelta(days=1),
-        "weekly": timedelta(weeks=1),
-        "bi_weekly": timedelta(weeks=2),
-        "monthly": timedelta(days=30),
-        "quarterly": timedelta(days=90),
-        "one_time": timedelta(days=0),
-    }.get(loan.payment_frequency.lower(), timedelta(days=30))  # fallback to monthly
+            freq_delta = {
+                "every_10_seconds": timedelta(seconds=10),
+                "every_30_seconds": timedelta(seconds=30),
+                "minutely": timedelta(minutes=1),
+                "every_5_minutes": timedelta(minutes=5),
+                "hourly": timedelta(hours=1),
+                "daily": timedelta(days=1),
+                "weekly": timedelta(weeks=1),
+                "bi_weekly": timedelta(weeks=2),
+                "monthly": timedelta(days=30),
+                "quarterly": timedelta(days=90),
+                "one_time": timedelta(days=0),
+            }.get(loan.payment_frequency.lower(), timedelta(days=30))
 
-    start_date = datetime.now(IST) + freq_delta
-    emi_amount = round((principal * (1 + rate / 100)) / n, 2)
+            start_date = datetime.now(IST) + freq_delta
+            emi_amount = round((principal * (1 + rate / 100)) / n, 2)
 
-    for i in range(n):
-        due_date = start_date + freq_delta * i
-        payment = models.Payment(
-            loan_id=loan.id,
-            amount=emi_amount,
-            due_date=due_date,
-            status=PaymentStatus.pending,
-        )
-        db.add(payment)
+            for i in range(n):
+                due_date = start_date + freq_delta * i
+                payment = models.Payment(
+                    loan_id=loan.id,
+                    amount=emi_amount,
+                    due_date=due_date,
+                    status=PaymentStatus.pending,
+                )
+                db.add(payment)
 
-# Optional: Update sub_status
     if loan_update.sub_status is not None:
         loan = crud_loan.update_loan_sub_status(db, loan_id, loan_update.sub_status)
 
     db.commit()
     db.refresh(loan)
     return loan
+
 
 # ------------------------- SEARCH LOANS -------------------------
 

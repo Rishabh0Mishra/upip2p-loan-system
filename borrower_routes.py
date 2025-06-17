@@ -56,7 +56,8 @@ def borrower_dashboard(
             lender_id=loan.lender_id,
             principal_amount=loan.principal_amount,
             interest_rate=loan.interest_rate,
-            term=loan.number_of_payments,
+            payment_frequency=loan.payment_frequency,
+            number_of_payments=loan.number_of_payments,
             status=loan.status,
             created_at=loan.created_at,
             updated_at=loan.updated_at,
@@ -68,15 +69,7 @@ def borrower_dashboard(
         completed_loans_count=len(completed_loans),
         total_borrowed=total_borrowed,
         total_repaid=total_repaid,
-        next_payment_due=(
-            schemas.PaymentResponse(
-                id=next_due.id,
-                loan_id=next_due.loan_id,
-                amount=next_due.amount,
-                due_date=next_due.due_date,
-                status=next_due.status,
-            ) if next_due else None
-        ),
+        next_payment_due=schemas.PaymentResponse.model_validate(next_due, from_attributes=True) if next_due else None,
         wallet_balance=wallet_balance
     )
 

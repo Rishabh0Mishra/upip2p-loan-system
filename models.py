@@ -147,20 +147,24 @@ class Loan(Base):
 
 class Payment(Base):
     __tablename__ = "payments"
+
     id = Column(Integer, primary_key=True, index=True)
     loan_id = Column(Integer, ForeignKey("loans.id", ondelete="CASCADE"))
     amount = Column(Float, nullable=False)
     status = Column(payment_status_enum, nullable=False, default="pending")
-    due_date = Column(Date, nullable=False)
-    paid_date = Column(Date, nullable=True)
+
+    due_date = Column(DateTime(timezone=True), nullable=False)   # <- datetime!
+    paid_date = Column(DateTime(timezone=True), nullable=True)   # <- datetime!
+
     txn_reference = Column(String, nullable=True)
     principal_portion = Column(Float, nullable=False, default=0)
     interest_portion = Column(Float, nullable=False, default=0)
     late_fee = Column(Float, nullable=False, default=0)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(IST))
-    loan = relationship("Loan", back_populates="payments")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(IST))
 
+    loan = relationship("Loan", back_populates="payments")
+    
 class NotificationType(str, enum.Enum):
     LOAN_REQUEST = "loan_request"
     LOAN_APPROVED = "loan_approved"
@@ -211,6 +215,7 @@ class AuditAction(str, enum.Enum):
     EMAIL_VERIFIED = "email_verified"
     MANDATE_FAILED = "mandate_failed"
     WALLET_TOPUP = "wallet_topup"
+    loan_approved = "loan_approved"
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"

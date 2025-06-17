@@ -23,3 +23,8 @@ alembic.ini
 uploaded_docs/
 
 dump.rdb/
+
+# Log files
+*.log
+*.log.*
+

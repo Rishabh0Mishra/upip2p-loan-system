@@ -13,7 +13,7 @@ def get_balance(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    balance = get_wallet_balance(current_user.id, db)  # ← pass db here
+    balance = get_wallet_balance(db, current_user.id)  # ✅ Corrected argument order
     return {"user_id": current_user.id, "balance": round(balance, 2)}
 
 @wallet_router.post("/add-funds")
@@ -25,8 +25,7 @@ def add_funds(
     if payload.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than zero.")
 
-    # ✅ Capture the returned wallet with updated balance
-    wallet = update_wallet_balance(current_user.id, payload.amount, db)
+    wallet = update_wallet_balance(db, current_user.id, payload.amount)  # ✅ Corrected argument order
 
     log_action(
         db,

@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from datetime import datetime
 import pytz
+import uuid
 
 from models import (
     Payment, Loan, PaymentStatus, PaymentRetryLog,
@@ -8,79 +10,103 @@ from models import (
 )
 from wallet_utils import get_wallet_balance, update_wallet_balance
 from audit import log_action
-import uuid
 
 IST = pytz.timezone("Asia/Kolkata")
 
 
 def process_due_emis(db: Session):
     now = datetime.now(IST)
+    print(f"🕐 EMI Processor running at: {now.strftime('%H:%M:%S.%f')[:-3]}")
 
+    # Get ONLY the next due EMI for each loan (prevents processing multiple EMIs)
+    subquery = (
+        db.query(
+            Payment.loan_id,
+            func.min(Payment.due_date).label("next_due")
+        )
+        .filter(
+            Payment.status == PaymentStatus.pending,
+            Payment.due_date <= now
+        )
+        .group_by(Payment.loan_id)
+        .subquery()
+    )
+
+    # Join to get the actual payment records
     due_payments = db.query(Payment).options(
         joinedload(Payment.loan)
-    ).filter(
-        Payment.due_date <= now,
-        Payment.status == PaymentStatus.pending
+    ).join(
+        subquery,
+        (Payment.loan_id == subquery.c.loan_id) & 
+        (Payment.due_date == subquery.c.next_due)
     ).all()
+
+    print(f"📊 Found {len(due_payments)} EMIs ready for processing")
 
     for payment in due_payments:
         borrower_id = payment.loan.borrower_id
         lender_id = payment.loan.lender_id
         amount_due = round(payment.amount + payment.late_fee, 2)
-        borrower_wallet = get_wallet_balance(borrower_id)
+        
+        # Debug timing
+        time_overdue = (now - payment.due_date).total_seconds()
+        print(f"📆 Processing Payment #{payment.id} | Loan #{payment.loan_id}")
+        print(f"    Due: {payment.due_date.strftime('%H:%M:%S.%f')[:-3]} | Overdue by: {time_overdue:.1f}s")
+        print(f"    Borrower: {borrower_id} | Amount: ₹{amount_due}")
 
-        print(f"📆 Processing Payment #{payment.id} | Loan #{payment.loan_id} | Borrower: {borrower_id} | Due: ₹{amount_due} | Wallet: ₹{borrower_wallet}")
+        borrower_wallet = get_wallet_balance(db, borrower_id)
+        print(f"    Wallet Balance: ₹{borrower_wallet}")
 
         if borrower_wallet >= amount_due:
-            # ✅ Mark as paid
             payment.status = PaymentStatus.completed
             payment.paid_date = now
             payment.txn_reference = f"upi-mandate-{uuid.uuid4().hex[:8]}"
 
-            update_wallet_balance(borrower_id, -amount_due)
-            update_wallet_balance(lender_id, amount_due)
+            update_wallet_balance(db, borrower_id, -amount_due)
+            update_wallet_balance(db, lender_id, amount_due)
 
-            retry_log = PaymentRetryLog(
+            db.add(PaymentRetryLog(
                 payment_id=payment.id,
                 status=PaymentRetryStatus.success,
                 notes="Auto mandate success"
-            )
-            db.add(retry_log)
+            ))
 
             log_action(
                 db,
                 user_id=borrower_id,
                 action=AuditAction.PAYMENT_MADE,
-                payment_id=payment.id
+                payment_id=payment.id,
+                loan_id=payment.loan_id
             )
 
-            print(f"✅ EMI Payment #{payment.id} completed successfully.")
+            print(f"✅ EMI Payment #{payment.id} completed successfully")
         else:
-            # ❌ Mark failure
-            retry_log = PaymentRetryLog(
+            shortage = amount_due - borrower_wallet
+            db.add(PaymentRetryLog(
                 payment_id=payment.id,
                 status=PaymentRetryStatus.failed,
-                notes="Auto mandate failed: Insufficient funds"
-            )
-            db.add(retry_log)
+                notes=f"Auto mandate failed: Insufficient funds (short by ₹{shortage})"
+            ))
 
             log_action(
                 db,
                 user_id=borrower_id,
                 action=AuditAction.MANDATE_FAILED,
-                payment_id=payment.id
+                payment_id=payment.id,
+                loan_id=payment.loan_id
             )
 
-            print(f"❌ EMI Payment #{payment.id} failed due to insufficient funds.")
+            print(f"❌ EMI Payment #{payment.id} failed - insufficient funds (short by ₹{shortage})")
 
-    db.commit()
-
-    # 🔁 Auto-complete eligible loans
-    complete_paid_loans(db)
+    if due_payments:
+        db.commit()
+        print(f"💾 Committed {len(due_payments)} EMI transactions")
+        complete_paid_loans(db)
+    else:
+        print("😴 No EMIs due for processing")
 
 
 def complete_paid_loans(db: Session):
-    """Mark loans as completed if all their payments are paid"""
     active_loans = db.query(Loan).filter(Loan.status == LoanStatus.active).all()
 
     for loan in active_loans:
@@ -100,6 +126,6 @@ def complete_paid_loans(db: Session):
                 loan_id=loan.id,
                 description=f"Loan #{loan.id} marked as completed after all EMIs paid"
             )
-            print(f"✅ Loan #{loan.id} marked as COMPLETED.")
-    
+            print(f"🎉 Loan #{loan.id} marked as COMPLETED - all EMIs paid!")
+
     db.commit()

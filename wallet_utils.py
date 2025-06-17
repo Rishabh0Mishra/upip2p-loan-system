@@ -1,27 +1,39 @@
-# wallet_utils.py
-
 from sqlalchemy.orm import Session
 from decimal import Decimal
 import models
 
-def get_wallet_balance(user_id: int, db: Session) -> float:
-    wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user_id).first()
-    if not wallet:
-        return 0.0
-    return round(wallet.balance, 2)
+from logging_config import StructuredLogger
 
-def update_wallet_balance(user_id: int, amount: float, db: Session):
+logger = StructuredLogger("wallet_logger")
+
+def get_wallet_balance(db: Session, user_id: int) -> Decimal:
     wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user_id).first()
-    
+    balance = wallet.balance if wallet else Decimal("0.00")
+
+    logger.log_event("wallet_balance_checked", {
+        "user_id": user_id,
+        "balance": float(balance)
+    })
+
+    return balance
+
+def update_wallet_balance(db: Session, user_id: int, amount: float) -> models.Wallet:
+    wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user_id).first()
+
     if not wallet:
         wallet = models.Wallet(user_id=user_id, balance=Decimal("0.00"))
         db.add(wallet)
-        db.flush()  # Ensure wallet.id is available if needed
 
-    wallet.balance += Decimal(str(amount))  # Ensures safe conversion
+    old_balance = float(wallet.balance)
+    wallet.balance += Decimal(str(amount))
     db.commit()
     db.refresh(wallet)
 
-    print(f"[Wallet] User {user_id} balance updated: {amount:+} → New: ₹{wallet.balance}")
-    
+    logger.log_event("wallet_balance_updated", {
+        "user_id": user_id,
+        "amount_changed": float(amount),
+        "old_balance": old_balance,
+        "new_balance": float(wallet.balance)
+    })
+
     return wallet

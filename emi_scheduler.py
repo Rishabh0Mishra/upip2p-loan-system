@@ -44,11 +44,15 @@ def create_repayment_schedule(db: Session, loan: Loan):
     if not delta:
         raise ValueError(f"Unsupported payment frequency: {frequency}")
 
-    # Schedule starts from now + delta
-    start_date = datetime.now(IST) + delta
-
+    # FIXED: Proper spacing - first EMI starts after one full interval
+    # This gives borrower time before first payment is due
+    start_time = datetime.now(IST)
+    
     for i in range(num_payments):
-        due_date = start_date + (delta * i)
+        # Each EMI is spaced by exactly one interval from the start
+        # EMI 1: start + 1*delta, EMI 2: start + 2*delta, etc.
+        due_date = start_time + (delta * (i + 1))
+        
         payment = Payment(
             loan_id=loan.id,
             amount=emi_amount,
@@ -59,3 +63,8 @@ def create_repayment_schedule(db: Session, loan: Loan):
 
     db.commit()
     print(f"📅 Created EMI schedule for Loan #{loan.id}: ₹{emi_amount} x {num_payments} @ {frequency}")
+    
+    # Debug: Print all due dates for verification
+    payments = db.query(Payment).filter(Payment.loan_id == loan.id).order_by(Payment.due_date).all()
+    for idx, payment in enumerate(payments, 1):
+        print(f"   EMI #{idx}: Due at {payment.due_date.strftime('%H:%M:%S')}")
