@@ -1,5 +1,3 @@
-# config.py
-
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -10,11 +8,9 @@ class Settings(BaseSettings):
     db_host: str = Field(..., alias="DB_HOST")
     db_name: str = Field(..., alias="DB_NAME")
 
-    # SMTP (Email)
-    smtp_host: str = Field(..., alias="SMTP_HOST")
-    smtp_port: int = Field(..., alias="SMTP_PORT")
-    smtp_user: str = Field(..., alias="SMTP_USER")
-    smtp_password: str = Field(..., alias="SMTP_PASSWORD")
+    # SendGrid (Email)
+    sendgrid_key: str = Field(..., alias="SENDGRID_KEY")
+    email_from: str = Field(..., alias="EMAIL_FROM")
 
     # JWT
     jwt_secret_key: str = Field(..., alias="JWT_SECRET_KEY")

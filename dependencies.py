@@ -1,37 +1,17 @@
-import os
+import html
+import re
+import bleach
+import models
+import sendgrid
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-import sendgrid
 from sendgrid.helpers.mail import Mail
-import html
-import bleach
-import re
-from dotenv import load_dotenv
-import models
 from database import SessionLocal
-
-# ===================== #
-# 🔃 Load .env
-# ===================== #
-load_dotenv()
-
-# ===================== #
-# 🔐 JWT Config
-# ===================== #
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", 7))
-
-# ===================== #
-# 📧 SendGrid Config
-# ===================== #
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-FROM_EMAIL = os.getenv("FROM_EMAIL")
+from config import settings
 
 # ===================== #
 # 🔐 Auth Context
@@ -115,14 +95,14 @@ def authenticate_user(db: Session, email: str, password: str):
 # ===================== #
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 def create_refresh_token(db: Session, user_id: int):
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days)
     token_data = {"user_id": user_id, "exp": expire.isoformat()}
-    token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
+    token = jwt.encode(token_data, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     refresh_token = models.RefreshToken(user_id=user_id, token=token, expires_at=expire)
     db.add(refresh_token)
     db.commit()
@@ -141,7 +121,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -167,9 +147,9 @@ def require_roles(allowed_roles: list):
 # 📧 Email Sender
 # ===================== #
 def send_email(to_email: str, subject: str, html_content: str):
-    sg = sendgrid.SendGridAPIClient(api_key=SENDGRID_API_KEY)
+    sg = sendgrid.SendGridAPIClient(api_key=settings.sendgrid_api_key)
     message = Mail(
-        from_email=FROM_EMAIL,
+        from_email=settings.from_email,
         to_emails=to_email,
         subject=subject,
         html_content=html_content

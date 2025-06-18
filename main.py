@@ -38,6 +38,10 @@ from health_routes import router as health_router
 from document_routes import router as document_router
 from repayment_routes import router as repayment_router
 from wallet_routes import wallet_router
+from esign_routes import router as esign_router
+
+
+
 
 # Shared dependencies
 from dependencies import (
@@ -255,3 +259,4 @@ app.include_router(health_router)
 app.include_router(document_router)
 app.include_router(repayment_router)
 app.include_router(wallet_router)
+app.include_router(esign_router)

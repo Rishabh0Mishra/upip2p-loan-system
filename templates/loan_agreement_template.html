@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loan Agreement</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        background-color: #f8f9fa;
+        padding: 2rem;
+      }
+
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 2rem;
+        font-weight: 300;
+        margin-bottom: 0.5rem;
+      }
+
+      .header p {
+        opacity: 0.9;
+        font-size: 0.95rem;
+      }
+
+      .content {
+        padding: 2rem;
+      }
+
+      .parties-section {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2rem;
+        margin-bottom: 2rem;
+      }
+
+      .party-card {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1.5rem;
+        border-left: 4px solid #667eea;
+      }
+
+      .party-card h3 {
+        color: #667eea;
+        margin-bottom: 1rem;
+        font-size: 1.1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .party-info {
+        margin-bottom: 0.5rem;
+      }
+
+      .party-info strong {
+        color: #333;
+        display: inline-block;
+        width: 80px;
+      }
+
+      .loan-terms {
+        background: white;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        padding: 2rem;
+        margin: 2rem 0;
+      }
+
+      .loan-terms h3 {
+        color: #495057;
+        margin-bottom: 1.5rem;
+        text-align: center;
+        font-size: 1.3rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        border-bottom: 2px solid #667eea;
+        padding-bottom: 0.5rem;
+      }
+
+      .terms-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1rem;
+      }
+
+      .term-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.8rem;
+        background: #f8f9fa;
+        border-radius: 6px;
+        border-left: 3px solid #28a745;
+      }
+
+      .term-label {
+        font-weight: 600;
+        color: #495057;
+      }
+
+      .term-value {
+        font-weight: 700;
+        color: #28a745;
+        font-size: 1.1rem;
+      }
+
+      .amount-highlight {
+        background: linear-gradient(135deg, #28a745, #20c997);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        text-align: center;
+        margin: 1.5rem 0;
+      }
+
+      .amount-highlight .amount {
+        font-size: 2rem;
+        font-weight: 700;
+        display: block;
+      }
+
+      .agreement-text {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 2rem 0;
+        font-size: 0.95rem;
+        line-height: 1.7;
+      }
+
+      .agreement-text h4 {
+        color: #856404;
+        margin-bottom: 1rem;
+        font-size: 1.1rem;
+      }
+
+      .terms-conditions {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 2rem 0;
+      }
+
+      .terms-conditions h4 {
+        color: #495057;
+        margin-bottom: 1rem;
+        font-size: 1.1rem;
+      }
+
+      .terms-conditions ul {
+        list-style: none;
+        padding-left: 0;
+      }
+
+      .terms-conditions li {
+        margin-bottom: 0.8rem;
+        padding-left: 1.5rem;
+        position: relative;
+      }
+
+      .terms-conditions li:before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        color: #28a745;
+        font-weight: bold;
+      }
+
+      .signature-section {
+        background: #e9ecef;
+        border-radius: 8px;
+        padding: 2rem;
+        margin-top: 2rem;
+        text-align: center;
+      }
+
+      .signature-section h4 {
+        color: #495057;
+        margin-bottom: 1rem;
+        font-size: 1.2rem;
+      }
+
+      .nsdl-info {
+        background: linear-gradient(135deg, #17a2b8, #138496);
+        color: white;
+        padding: 1rem;
+        border-radius: 6px;
+        margin-top: 1rem;
+      }
+
+      .footer {
+        background: #343a40;
+        color: white;
+        text-align: center;
+        padding: 1.5rem;
+        font-size: 0.9rem;
+      }
+
+      .timestamp {
+        margin-top: 2rem;
+        padding-top: 1rem;
+        border-top: 1px solid #dee2e6;
+        font-size: 0.9rem;
+        color: #6c757d;
+        text-align: center;
+      }
+
+      @media (max-width: 768px) {
+        body {
+          padding: 1rem;
+        }
+
+        .parties-section {
+          grid-template-columns: 1fr;
+          gap: 1rem;
+        }
+
+        .terms-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .content {
+          padding: 1.5rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Peer-to-Peer Loan Agreement</h1>
+        <p>Digital Loan Contract with NSDL eSign Authentication</p>
+      </div>
+
+      <div class="content">
+        <div class="parties-section">
+          <div class="party-card">
+            <h3>🏦 Lender Details</h3>
+            <div class="party-info">
+              <strong>Name:</strong> {{ loan.lender_name }}
+            </div>
+            <div class="party-info">
+              <strong>Email:</strong> {{ loan.lender_email }}
+            </div>
+            <div class="party-info">
+              <strong>Phone:</strong> {{ loan.lender_phone or 'Not provided' }}
+            </div>
+          </div>
+
+          <div class="party-card">
+            <h3>👤 Borrower Details</h3>
+            <div class="party-info">
+              <strong>Name:</strong> {{ loan.borrower_name }}
+            </div>
+            <div class="party-info">
+              <strong>Email:</strong> {{ loan.borrower_email }}
+            </div>
+            <div class="party-info">
+              <strong>Phone:</strong> {{ loan.borrower_phone or 'Not provided'
+              }}
+            </div>
+          </div>
+        </div>
+
+        <div class="amount-highlight">
+          <span class="amount">₹{{ loan.amount }}</span>
+          <small>Loan Principal Amount</small>
+        </div>
+
+        <div class="loan-terms">
+          <h3>📋 Loan Terms & Conditions</h3>
+          <div class="terms-grid">
+            <div class="term-item">
+              <span class="term-label">Interest Rate</span>
+              <span class="term-value">{{ loan.interest_rate }}% p.a.</span>
+            </div>
+            <div class="term-item">
+              <span class="term-label">Loan Duration</span>
+              <span class="term-value">{{ loan.num_payments }} EMIs</span>
+            </div>
+            <div class="term-item">
+              <span class="term-label">Start Date</span>
+              <span class="term-value">{{ loan.start_date }}</span>
+            </div>
+            <div class="term-item">
+              <span class="term-label">EMI Amount</span>
+              <span class="term-value">₹{{ loan.emi_amount or 'TBD' }}</span>
+            </div>
+            <div class="term-item">
+              <span class="term-label">Total Repayment</span>
+              <span class="term-value">₹{{ loan.total_amount or 'TBD' }}</span>
+            </div>
+            <div class="term-item">
+              <span class="term-label">Loan ID</span>
+              <span class="term-value"
+                >{{ loan.loan_id or 'Auto-generated' }}</span
+              >
+            </div>
+          </div>
+        </div>
+
+        <div class="agreement-text">
+          <h4>🤝 Agreement Declaration</h4>
+          <p>
+            This digital loan agreement confirms that
+            <strong>{{ loan.lender_name }}</strong> (the "Lender") agrees to
+            lend <strong>₹{{ loan.amount }}</strong> to
+            <strong>{{ loan.borrower_name }}</strong> (the "Borrower") under the
+            terms and conditions specified above.
+          </p>
+
+          <p>
+            Both parties acknowledge that they have read, understood, and agree
+            to be bound by all terms of this agreement. The loan will be
+            disbursed upon successful completion of digital signatures via NSDL
+            eSign service.
+          </p>
+        </div>
+
+        <div class="terms-conditions">
+          <h4>📜 Key Terms & Conditions</h4>
+          <ul>
+            <li>
+              The borrower agrees to repay the loan in {{ loan.num_payments }}
+              equal monthly installments (EMIs)
+            </li>
+            <li>First EMI is due 30 days from the loan disbursement date</li>
+            <li>
+              Late payment charges of 2% per month will apply on overdue amounts
+            </li>
+            <li>
+              The borrower may prepay the loan without any prepayment penalties
+            </li>
+            <li>
+              Both parties agree to resolve disputes through mutual discussion
+              or arbitration
+            </li>
+            <li>This agreement is governed by the laws of India</li>
+            <li>
+              Any modifications to this agreement must be made in writing and
+              signed by both parties
+            </li>
+          </ul>
+        </div>
+
+        <div class="signature-section">
+          <h4>✍️ Digital Signature</h4>
+          <p>
+            Both parties will digitally sign this agreement using NSDL eSign
+            service to make it legally binding.
+          </p>
+
+          <div class="nsdl-info">
+            <strong>🔐 NSDL eSign Authentication</strong><br />
+            This document will be digitally signed using NSDL's secure eSign
+            service, ensuring legal validity and authenticity of signatures.
+          </div>
+        </div>
+
+        <div class="timestamp">
+          <p>
+            <strong>Document Generated:</strong> {{ loan.generated_date or 'N/A'
+            }}
+          </p>
+          <p>
+            <strong>Platform:</strong> P2P Lending App |
+            <strong>Version:</strong> 1.0
+          </p>
+        </div>
+      </div>
+
+      <div class="footer">
+        <p>
+          This is a digitally generated loan agreement. Please ensure all
+          details are correct before signing.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
