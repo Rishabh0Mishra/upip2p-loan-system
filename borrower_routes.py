@@ -34,14 +34,14 @@ def borrower_dashboard(
     for loan in loans:
         if loan.status in [models.LoanStatus.active, models.LoanStatus.completed]:
             for payment in loan.payments:
-                if payment.status == "paid":
-                    total_repaid += payment.amount
+                if payment.status == models.PaymentStatus.completed:
+                    total_repaid += Decimal(str(payment.amount)) + Decimal(str(payment.late_fee or 0))
 
     next_due = (
         db.query(models.Payment)
         .join(models.Loan)
         .filter(models.Loan.borrower_id == current_user.id)
-        .filter(models.Payment.status == "pending")
+        .filter(models.Payment.status == models.PaymentStatus.pending)
         .order_by(models.Payment.due_date.asc())
         .first()
     )

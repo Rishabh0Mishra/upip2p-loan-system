@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from datetime import datetime
+from decimal import Decimal
 import pytz
 import uuid
 
@@ -18,7 +19,7 @@ def process_due_emis(db: Session):
     now = datetime.now(IST)
     print(f"🕐 EMI Processor running at: {now.strftime('%H:%M:%S.%f')[:-3]}")
 
-    # Get ONLY the next due EMI for each loan (prevents processing multiple EMIs)
+    # Get ONLY the next due EMI for each loan
     subquery = (
         db.query(
             Payment.loan_id,
@@ -32,12 +33,11 @@ def process_due_emis(db: Session):
         .subquery()
     )
 
-    # Join to get the actual payment records
     due_payments = db.query(Payment).options(
         joinedload(Payment.loan)
     ).join(
         subquery,
-        (Payment.loan_id == subquery.c.loan_id) & 
+        (Payment.loan_id == subquery.c.loan_id) &
         (Payment.due_date == subquery.c.next_due)
     ).all()
 
@@ -46,15 +46,19 @@ def process_due_emis(db: Session):
     for payment in due_payments:
         borrower_id = payment.loan.borrower_id
         lender_id = payment.loan.lender_id
-        amount_due = round(payment.amount + payment.late_fee, 2)
-        
-        # Debug timing
+
+        # Ensure Decimals
+        amount_due = (Decimal(payment.amount) + Decimal(payment.late_fee)).quantize(Decimal('0.01'))
+
+        if payment.due_date.tzinfo is None:
+            payment.due_date = IST.localize(payment.due_date)
+
         time_overdue = (now - payment.due_date).total_seconds()
         print(f"📆 Processing Payment #{payment.id} | Loan #{payment.loan_id}")
         print(f"    Due: {payment.due_date.strftime('%H:%M:%S.%f')[:-3]} | Overdue by: {time_overdue:.1f}s")
         print(f"    Borrower: {borrower_id} | Amount: ₹{amount_due}")
 
-        borrower_wallet = get_wallet_balance(db, borrower_id)
+        borrower_wallet = Decimal(get_wallet_balance(db, borrower_id))
         print(f"    Wallet Balance: ₹{borrower_wallet}")
 
         if borrower_wallet >= amount_due:
@@ -81,7 +85,8 @@ def process_due_emis(db: Session):
 
             print(f"✅ EMI Payment #{payment.id} completed successfully")
         else:
-            shortage = amount_due - borrower_wallet
+            shortage = (amount_due - borrower_wallet).quantize(Decimal('0.01'))
+
             db.add(PaymentRetryLog(
                 payment_id=payment.id,
                 status=PaymentRetryStatus.failed,

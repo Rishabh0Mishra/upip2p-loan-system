@@ -87,25 +87,25 @@ class LoanSearchService:
             )
 
             summary = schemas.LoanSummary(
-                id=loan.id,
-                lender_id=loan.lender_id,
-                borrower_id=loan.borrower_id,
-                principal_amount=float(loan.principal_amount),
-                interest_rate=float(loan.interest_rate),
-                total_amount=float(loan.total_amount),
-                payment_frequency=loan.payment_frequency.value,
-                number_of_payments=loan.number_of_payments,
-                payment_amount=float(loan.payment_amount),
-                start_date=loan.start_date,
-                due_date=loan.due_date,
-                next_payment_date=next_payment_date,
-                status=loan.status,
-                sub_status=loan.sub_status,
-                amount_paid=amount_paid,
-                amount_remaining=amount_remaining,
-                description=loan.description,
-                created_at=loan.created_at,
-                updated_at=loan.updated_at
+            id=loan.id,
+            lender_id=loan.lender_id,
+            borrower_id=loan.borrower_id,
+            principal_amount=float(loan.principal_amount),
+            interest_rate=float(loan.interest_rate),
+            total_amount=float(loan.total_amount),
+            payment_frequency=loan.payment_frequency.value,
+            number_of_payments=loan.number_of_payments,
+            payment_amount=float(loan.payment_amount),
+            start_date=loan.start_date.date() if loan.start_date else None,
+            due_date=loan.due_date.date() if loan.due_date else None,
+            next_payment_date=next_payment_date.date() if next_payment_date else None,
+            status=loan.status,
+            sub_status=loan.sub_status,
+            amount_paid=amount_paid,
+            amount_remaining=amount_remaining,
+            description=loan.description,
+            created_at=loan.created_at.date() if loan.created_at else None,
+            updated_at=loan.updated_at.date() if loan.updated_at else None
             )
             loan_summaries.append(summary)
 
