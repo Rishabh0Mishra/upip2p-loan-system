@@ -10,6 +10,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from dotenv import load_dotenv
+
 
 import redis.asyncio as redis
 import logging
@@ -38,9 +40,10 @@ from health_routes import router as health_router
 from document_routes import router as document_router
 from repayment_routes import router as repayment_router
 from wallet_routes import wallet_router
-from esign_routes import router as esign_router
+from dual_signing.dual_signing_routes import router as dual_signing_router
+from dual_signing.dual_signing_store import dual_signing_store
 
-
+load_dotenv()
 
 
 # Shared dependencies
@@ -247,6 +250,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, user_id)
+        
+
+
+@app.on_event("startup")
+def clear_dual_signing_cache_on_reload():
+    dual_signing_store._dual_requests.clear()
+    dual_signing_store._signing_requests.clear()
+    print("🧹 Dual signing cache cleared on startup")
+        
 
 # Routers
 app.include_router(admin_router)
@@ -259,4 +271,4 @@ app.include_router(health_router)
 app.include_router(document_router)
 app.include_router(repayment_router)
 app.include_router(wallet_router)
-app.include_router(esign_router)
+app.include_router(dual_signing_router)

@@ -8,7 +8,8 @@ from dependencies import get_db, require_roles
 from audit import log_action
 from models import AuditAction
 from decimal import Decimal
-
+import logging
+logger = logging.getLogger(__name__)
 borrower_router = APIRouter(prefix="/borrower", tags=["borrower"])
 
 
@@ -85,8 +86,19 @@ def request_loan(
     if loan.borrower_id != current_user.id:
         raise HTTPException(status_code=403, detail="You can only request loans for yourself")
 
+    # Step 1: Create loan in DB
     db_loan = crud_loan.create_loan(db, loan)
 
+    # Step 2: Initiate dual e-signing
+    try:
+        from dual_signing.dual_signing_service import initiate_after_borrower_request
+        initiate_after_borrower_request(db, db_loan)
+    except Exception as e:
+        # Log but don't crash the request
+        logger.error(f"Failed to initiate dual signing for loan {db_loan.id}: {str(e)}")
+
+
+    # Step 3: Log action
     log_action(
         db,
         user_id=current_user.id,
@@ -94,4 +106,5 @@ def request_loan(
         description=f"Loan request #{db_loan.id} created by borrower"
     )
 
+    # Step 4: Return loan data
     return db_loan

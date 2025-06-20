@@ -137,6 +137,10 @@ class Loan(Base):
     amount_remaining = Column(Numeric(12, 2), nullable=False, default=0)
 
     description = Column(Text, nullable=True)
+
+    # ✅ Add this field to store final signed agreement
+    signed_agreement_url = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(IST))
     updated_at = Column(DateTime, default=lambda: datetime.now(IST), onupdate=lambda: datetime.now(IST))
 
@@ -144,6 +148,7 @@ class Loan(Base):
     borrower = relationship("User", foreign_keys=[borrower_id])
     payments = relationship("Payment", back_populates="loan", cascade="all, delete-orphan")
     documents = relationship("LoanDocument", back_populates="loan")
+
 
 class Payment(Base):
     __tablename__ = "payments"

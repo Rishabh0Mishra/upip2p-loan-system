@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     environment: str = Field(..., alias="ENVIRONMENT")
     debug: bool = Field(..., alias="DEBUG")
 
+    # NSDL eSign
+    use_nsdl_mock: bool = Field(False, alias="USE_NSDSL_MOCK")
+    nsdl_esign_base_url: str = Field("https://api.nsdl.co.in/esign/v1", alias="NSDL_ESIGN_BASE_URL")
+    nsdl_api_key: str = Field("your_nsdl_api_key", alias="NSDL_API_KEY")
+    nsdl_secret_key: str = Field("your_nsdl_secret_key", alias="NSDL_SECRET_KEY")
+
     @property
     def database_url(self) -> str:
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}/{self.db_name}"

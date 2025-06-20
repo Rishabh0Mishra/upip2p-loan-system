@@ -10,6 +10,7 @@ from models import AuditAction
 from cache import cache_result, invalidate_cache
 from typing import Optional
 from datetime import datetime, timedelta
+from dual_signing.dual_signing_service import DualSigningService
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -95,6 +96,10 @@ def create_loan(db: Session, loan: schemas.LoanCreate):
 
     db.add(db_loan)
     db.commit()
+    db.refresh(db_loan)  
+
+    # -----------------------------------------------------------
+
     db.refresh(db_loan)
 
     invalidate_cache(f"get_loans_by_user:{loan.lender_id}")

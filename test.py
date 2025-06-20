@@ -53,3 +53,5 @@
 # if __name__ == "__main__":
 #     nuke_and_reset()
 
+# import pdfkit
+# print(pdfkit.configuration().wkhtmltopdf)
