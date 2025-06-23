@@ -11,16 +11,19 @@ def log_action(
     payment_id: Optional[int] = None,
     loan_id: Optional[int] = None
 ):
-    # Convert dict to string if needed
-    if isinstance(description, dict):
-        description = str(description)
+    try:
+        if isinstance(description, dict):
+            description = str(description)
 
-    log = AuditLog(
-        user_id=user_id,
-        action=action,
-        description=description,
-        payment_id=payment_id,
-        loan_id=loan_id
-    )
-    db.add(log)
-    db.commit()
+        log = AuditLog(
+            user_id=user_id,
+            action=action,
+            description=description,
+            payment_id=payment_id,
+            loan_id=loan_id
+        )
+        db.add(log)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise

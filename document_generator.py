@@ -9,6 +9,8 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+import os
+
 class DocumentGenerator:
     def __init__(self, template_path: str = None, output_storage_path: str = None):
         """
@@ -19,8 +21,14 @@ class DocumentGenerator:
             output_storage_path: Path where generated documents will be stored
         """
         self.template_path = template_path or os.path.join("templates", "loan_agreement_template.html")
-        self.output_storage_path = output_storage_path or "/tmp/loan_documents"
+        default_path = "/Users/rishabhmishra/Desktop/UPIp2p/uploaded_docs/generated_docs"
+        self.output_storage_path = output_storage_path or default_path
         self._ensure_output_directory()
+
+    def _ensure_output_directory(self):
+        """Ensure the output directory exists"""
+        os.makedirs(self.output_storage_path, exist_ok=True)
+
 
     def _ensure_output_directory(self):
         """Ensure output directory exists"""

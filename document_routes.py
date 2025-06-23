@@ -63,8 +63,12 @@ async def upload_document(
         file_path=saved_path,
         uploaded_by=current_user.id
     )
-    db.add(loan_doc)
-    db.commit()
-    db.refresh(loan_doc)
+    try:
+        db.add(loan_doc)
+        db.commit()
+        db.refresh(loan_doc)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Document upload failed: {str(e)}")
 
     return {"message": "Document uploaded", "document_id": loan_doc.id}

@@ -27,6 +27,24 @@ class TransactionStatus(str, enum.Enum):
     success = "success"
     failed = "failed"
 
+class DualSigningStatus(str, enum.Enum):
+    PENDING_BORROWER = "pending_borrower"
+    BORROWER_SIGNED = "borrower_signed"
+    PENDING_LENDER = "pending_lender"
+    FULLY_SIGNED = "fully_signed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+class SigningRequestStatus(str, enum.Enum):
+    PENDING = "pending"
+    NSDL_INITIATED = "nsdl_initiated"
+    SIGNED = "signed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+class SignerRole(str, enum.Enum):
+    BORROWER = "borrower"
+    LENDER = "lender"
 # PostgreSQL-native ENUM types
 payment_status_enum = PG_ENUM(
     PaymentStatus,
@@ -98,6 +116,9 @@ class LoanSubStatus(str, enum.Enum):
     waiting_reinitiation = "waiting_reinitiation"
     overdue = "overdue"
     partially_paid = "partially_paid"
+    pending_signature = "pending_signature"  # ← add this
+    fully_signed = "fully_signed"          
+    signature_failed = "signature_failed" 
 
 class PaymentFrequency(str, enum.Enum):
     every_10_seconds = "every_10_seconds"
@@ -284,3 +305,53 @@ class Wallet(Base):
 
     user = relationship("User", back_populates="wallet")
     transactions = relationship("WalletTransaction", back_populates="wallet", cascade="all, delete-orphan")
+
+class DualSigningRequest(Base):
+    __tablename__ = "dual_signing_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    loan_id = Column(Integer, ForeignKey("loans.id"), unique=True, nullable=False)
+
+    borrower_name = Column(String, nullable=False)
+    borrower_email = Column(String, nullable=False)
+    borrower_phone = Column(String, nullable=False)
+    lender_name = Column(String, nullable=False)
+    lender_email = Column(String, nullable=False)
+    lender_phone = Column(String, nullable=False)
+
+    document_url = Column(String, nullable=False)
+    borrower_signed_doc_url = Column(String, nullable=True)
+    lender_signed_doc_url = Column(String, nullable=True)
+    fully_signed_doc_url = Column(String, nullable=True)
+
+    status = Column(SqlEnum(DualSigningStatus, name="dual_signing_status_enum", native_enum=False), default=DualSigningStatus.PENDING_BORROWER, nullable=False)
+
+    error_message = Column(String, nullable=True)
+    retry_count = Column(Integer, default=0, nullable=False)
+
+    borrower_signed_at = Column(DateTime, nullable=True)
+    lender_signed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SigningRequest(Base):
+    __tablename__ = "signing_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(String, unique=True, nullable=False)
+    loan_id = Column(Integer, ForeignKey("loans.id"), nullable=False)
+
+    signer_name = Column(String, nullable=False)
+    signer_email = Column(String, nullable=False)
+    signer_phone = Column(String, nullable=False)
+    document_url = Column(String, nullable=False)
+    callback_url = Column(String, nullable=False)
+
+    signer_role = Column(SqlEnum(SignerRole, name="signer_role_enum", native_enum=False), nullable=False)
+    nsdl_request_id = Column(String, nullable=True)
+    signed_document_url = Column(String, nullable=True)
+
+    error_message = Column(String, nullable=True)
+    status = Column(SqlEnum(SigningRequestStatus, name="signing_request_status_enum", native_enum=False), default=SigningRequestStatus.PENDING, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

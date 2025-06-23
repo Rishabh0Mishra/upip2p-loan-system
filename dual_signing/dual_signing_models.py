@@ -1,13 +1,17 @@
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional, Dict, Any
+from sqlalchemy import Column, String, Enum, DateTime, Integer, Text
+from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timedelta
+from enum import Enum as PyEnum
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
 
-class SignerRole(Enum):
+Base = declarative_base()
+
+class SignerRole(PyEnum):
     BORROWER = "borrower"
     LENDER = "lender"
 
-class DualSigningStatus(Enum):
+class DualSigningStatus(PyEnum):
     PENDING_BORROWER = "pending_borrower"
     BORROWER_SIGNED = "borrower_signed"
     PENDING_LENDER = "pending_lender"
@@ -15,101 +19,63 @@ class DualSigningStatus(Enum):
     FAILED = "failed"
     EXPIRED = "expired"
 
-class SigningRequestStatus(Enum):
+class SigningRequestStatus(PyEnum):
     PENDING = "pending"
     NSDL_INITIATED = "nsdl_initiated"
     SIGNED = "signed"
     FAILED = "failed"
     EXPIRED = "expired"
 
-@dataclass
-class DualSigningRequest:
-    loan_id: str
-    borrower_name: str
-    borrower_email: str
-    borrower_phone: str
-    lender_name: str
-    lender_email: str
-    lender_phone: str
-    document_url: str
-    document_hash: Optional[str] = None
-    status: DualSigningStatus = DualSigningStatus.PENDING_BORROWER
-    borrower_signing_request_id: Optional[str] = None
-    lender_signing_request_id: Optional[str] = None
-    borrower_signed_doc_url: Optional[str] = None
-    lender_signed_doc_url: Optional[str] = None
-    fully_signed_doc_url: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    borrower_signed_at: Optional[datetime] = None
-    lender_signed_at: Optional[datetime] = None
-    expires_at: datetime = field(default_factory=lambda: datetime.utcnow() + timedelta(hours=24))
-    error_message: Optional[str] = None
-    retry_count: int = 0
-    max_retries: int = 3
-    
-    def is_expired(self) -> bool:
-        return datetime.utcnow() > self.expires_at
-    
-    def can_retry(self) -> bool:
-        return self.retry_count < self.max_retries
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "loan_id": self.loan_id,
-            "borrower_name": self.borrower_name,
-            "lender_name": self.lender_name,
-            "status": self.status.value,
-            "borrower_signed_doc_url": self.borrower_signed_doc_url,
-            "lender_signed_doc_url": self.lender_signed_doc_url,
-            "fully_signed_doc_url": self.fully_signed_doc_url,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "borrower_signed_at": self.borrower_signed_at.isoformat() if self.borrower_signed_at else None,
-            "lender_signed_at": self.lender_signed_at.isoformat() if self.lender_signed_at else None,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "error_message": self.error_message,
-            "retry_count": self.retry_count
-        }
+class DualSigningRequest(Base):
+    __tablename__ = "dual_signing_requests"
 
-@dataclass
-class SigningRequest:
-    request_id: str
-    signer_name: str
-    signer_email: str
-    signer_phone: str
-    document_url: str
-    callback_url: str
-    signer_role: SignerRole
-    loan_id: str
-    status: SigningRequestStatus = SigningRequestStatus.PENDING
-    nsdl_request_id: Optional[str] = None
-    signed_document_url: Optional[str] = None
-    error_message: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    expires_at: datetime = field(default_factory=lambda: datetime.utcnow() + timedelta(hours=24))
-    retry_count: int = 0
-    max_retries: int = 3
-    
-    def is_expired(self) -> bool:
-        return datetime.utcnow() > self.expires_at
-    
-    def can_retry(self) -> bool:
-        return self.retry_count < self.max_retries
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "request_id": self.request_id,
-            "signer_name": self.signer_name,
-            "signer_email": self.signer_email,
-            "signer_role": self.signer_role.value,
-            "loan_id": self.loan_id,
-            "status": self.status.value,
-            "nsdl_request_id": self.nsdl_request_id,
-            "signed_document_url": self.signed_document_url,
-            "error_message": self.error_message,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "retry_count": self.retry_count
-        }
+    loan_id = Column(String, primary_key=True)
+    borrower_name = Column(String, nullable=False)
+    borrower_email = Column(String, nullable=False)
+    borrower_phone = Column(String, nullable=False)
+    lender_name = Column(String, nullable=False)
+    lender_email = Column(String, nullable=False)
+    lender_phone = Column(String, nullable=False)
+    document_url = Column(Text, nullable=False)
+    document_hash = Column(String, nullable=True)
+
+    status = Column(Enum(DualSigningStatus), default=DualSigningStatus.PENDING_BORROWER)
+    borrower_signing_request_id = Column(String, nullable=True)
+    lender_signing_request_id = Column(String, nullable=True)
+    borrower_signed_doc_url = Column(Text, nullable=True)
+    lender_signed_doc_url = Column(Text, nullable=True)
+    fully_signed_doc_url = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    borrower_signed_at = Column(DateTime, nullable=True)
+    lender_signed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=24))
+
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+
+class SigningRequest(Base):
+    __tablename__ = "signing_requests"
+
+    request_id = Column(String, primary_key=True)
+    signer_name = Column(String, nullable=False)
+    signer_email = Column(String, nullable=False)
+    signer_phone = Column(String, nullable=False)
+    document_url = Column(Text, nullable=False)
+    callback_url = Column(Text, nullable=False)
+    signer_role = Column(Enum(SignerRole), nullable=False)
+    loan_id = Column(String, nullable=False)
+
+    status = Column(Enum(SigningRequestStatus), default=SigningRequestStatus.PENDING)
+    nsdl_request_id = Column(String, nullable=True)
+    signed_document_url = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=24))
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
 
 @dataclass
 class NSDLResponse:
@@ -118,11 +84,11 @@ class NSDLResponse:
     signing_url: Optional[str] = None
     signed_document_url: Optional[str] = None
     error_message: Optional[str] = None
-    
+
     @classmethod
     def success(cls, request_id: str, signing_url: str) -> 'NSDLResponse':
         return cls(status="SUCCESS", request_id=request_id, signing_url=signing_url)
-    
+
     @classmethod
     def error(cls, error_message: str) -> 'NSDLResponse':
         return cls(status="ERROR", error_message=error_message)
@@ -134,6 +100,6 @@ class SigningCallbackData:
     signed_document_url: Optional[str] = None
     error_message: Optional[str] = None
     signature_details: Optional[Dict[str, Any]] = None
-    
+
     def is_successful(self) -> bool:
         return self.status.upper() == "SIGNED"

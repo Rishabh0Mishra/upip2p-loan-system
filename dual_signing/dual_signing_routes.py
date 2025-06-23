@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 from typing import Dict, Any
 import logging
 import os
@@ -7,21 +8,26 @@ import os
 from .dual_signing_service import DualSigningService
 from .nsdl_client import NSDLClient, MockNSDLClient
 from .dual_signing_models import DualSigningStatus
-from dependencies import require_roles
+from dependencies import require_roles, get_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dual-signing", tags=["Dual Signing"])
+require_admin = require_roles(["admin"])
 
 # Use mock NSDL client in development
 use_mock = os.getenv("USE_MOCK_NSDL", "true").lower() == "true"
-client = MockNSDLClient() if use_mock else NSDLClient()
-service = DualSigningService(client)
 
-require_admin = require_roles(["admin"])
+def get_dual_signing_service(db: Session = Depends(get_db)) -> DualSigningService:
+    client = MockNSDLClient() if use_mock else NSDLClient()
+    return DualSigningService(nsdl_client=client, db=db)
+
 
 @router.post("/initiate", dependencies=[Depends(require_admin)])
-async def initiate_dual_signing(request: Request):
+async def initiate_dual_signing(
+    request: Request,
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         data = await request.json()
         required_fields = [
@@ -68,8 +74,12 @@ async def initiate_dual_signing(request: Request):
         logger.error(f"initiate_dual_signing error: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.post("/callback/borrower")
-async def borrower_signing_callback(request: Request):
+async def borrower_signing_callback(
+    request: Request,
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         data = await request.json()
         logger.info(f"Borrower callback: {data}")
@@ -82,8 +92,12 @@ async def borrower_signing_callback(request: Request):
         logger.error(f"Borrower callback error: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.post("/callback/lender")
-async def lender_signing_callback(request: Request):
+async def lender_signing_callback(
+    request: Request,
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         data = await request.json()
         logger.info(f"Lender callback: {data}")
@@ -96,8 +110,12 @@ async def lender_signing_callback(request: Request):
         logger.error(f"Lender callback error: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.get("/status/{loan_id}")
-def get_signing_status(loan_id: str):
+def get_signing_status(
+    loan_id: str,
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         status_data = service.get_dual_signing_status(loan_id)
         if not status_data:
@@ -112,8 +130,11 @@ def get_signing_status(loan_id: str):
         logger.error(f"Status check error for loan {loan_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.get("/loans", dependencies=[Depends(require_admin)])
-def get_all_loan_signings():
+def get_all_loan_signings(
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         all_data = service.get_all_dual_signing_requests()
         return JSONResponse(
@@ -124,8 +145,13 @@ def get_all_loan_signings():
         logger.error(f"Get all loan signings error: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.post("/retry/{loan_id}", dependencies=[Depends(require_admin)])
-async def retry_failed_signing(loan_id: str, request: Request):
+async def retry_failed_signing(
+    loan_id: str,
+    request: Request,
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         data = await request.json()
         callback_base_url = data.get("callback_base_url", "http://localhost:8000")
@@ -138,8 +164,13 @@ async def retry_failed_signing(loan_id: str, request: Request):
         logger.error(f"Retry error for loan {loan_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.post("/cancel/{loan_id}", dependencies=[Depends(require_admin)])
-async def cancel_dual_signing(loan_id: str, request: Request):
+async def cancel_dual_signing(
+    loan_id: str,
+    request: Request,
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         data = await request.json()
         reason = data.get("reason", "Cancelled by user")
@@ -152,8 +183,11 @@ async def cancel_dual_signing(loan_id: str, request: Request):
         logger.error(f"Cancel signing error for loan {loan_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.get("/statistics", dependencies=[Depends(require_admin)])
-def get_signing_statistics():
+def get_signing_statistics(
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         stats = service.get_signing_statistics()
         return JSONResponse(
@@ -164,8 +198,11 @@ def get_signing_statistics():
         logger.error(f"Statistics error: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
+
 @router.post("/cleanup-expired", dependencies=[Depends(require_admin)])
-async def cleanup_expired_requests():
+async def cleanup_expired_requests(
+    service: DualSigningService = Depends(get_dual_signing_service)
+):
     try:
         count = service.cleanup_expired_requests()
         return JSONResponse(

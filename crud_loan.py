@@ -10,10 +10,21 @@ from models import AuditAction
 from cache import cache_result, invalidate_cache
 from typing import Optional
 from datetime import datetime, timedelta
-from dual_signing.dual_signing_service import DualSigningService
 import pytz
+import logging
+
+
+# Import dual signing components
+from dual_signing.dual_signing_service import DualSigningService
+from dual_signing.nsdl_client import get_nsdl_client
+from dual_signing.pdf_merger import PDFMerger
+from document_generator import DocumentGenerator
+from dual_signing_crud import get_dual_request, update_dual_request
+from dual_signing.dual_signing_models import DualSigningStatus
+
 
 IST = pytz.timezone("Asia/Kolkata")
+logger = logging.getLogger(__name__)
 
 
 def validate_loan_data(loan: schemas.LoanCreate):
@@ -50,16 +61,24 @@ def validate_users_exist(db: Session, lender_id: int, borrower_id: int):
 
 
 def get_wallet(db: Session, user_id: int):
-    wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user_id).first()
-    if not wallet:
-        wallet = models.Wallet(user_id=user_id, balance=Decimal("0.00"))
-        db.add(wallet)
-        db.commit()
-        db.refresh(wallet)
-    return wallet
+    try:
+        wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user_id).first()
+        if not wallet:
+            wallet = models.Wallet(user_id=user_id, balance=Decimal("0.00"))
+            db.add(wallet)
+            db.commit()
+            db.refresh(wallet)
+        return wallet
+    except Exception:
+        db.rollback()
+        raise
 
 
-def create_loan(db: Session, loan: schemas.LoanCreate):
+
+def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = "http://localhost:8000"):
+    """
+    Create a loan and automatically trigger dual signing process
+    """
     validate_loan_data(loan)
     lender, borrower = validate_users_exist(db, loan.lender_id, loan.borrower_id)
 
@@ -80,31 +99,30 @@ def create_loan(db: Session, loan: schemas.LoanCreate):
     start_date = datetime.now(IST)
     due_date = start_date + (freq_delta * loan.number_of_payments)
 
-    db_loan = models.Loan(
-        lender_id=loan.lender_id,
-        borrower_id=loan.borrower_id,
-        principal_amount=Decimal(str(loan.principal_amount)),
-        interest_rate=Decimal(str(loan.interest_rate)),
-        payment_frequency=loan.payment_frequency,
-        number_of_payments=loan.number_of_payments,
-        description=loan.description,
-        start_date=start_date,
-        due_date=due_date,
-        status=models.LoanStatus.pending,
-        sub_status=models.LoanSubStatus.none
-    )
+    # Create loan with pending_signature status
+    try:
+        db_loan = models.Loan(
+            lender_id=loan.lender_id,
+            borrower_id=loan.borrower_id,
+            principal_amount=Decimal(str(loan.principal_amount)),
+            interest_rate=Decimal(str(loan.interest_rate)),
+            payment_frequency=loan.payment_frequency,
+            number_of_payments=loan.number_of_payments,
+            description=loan.description,
+            start_date=start_date,
+            due_date=due_date,
+            status=models.LoanStatus.pending,
+            sub_status=models.LoanSubStatus.pending_signature  # Set to pending signature
+        )
 
-    db.add(db_loan)
-    db.commit()
-    db.refresh(db_loan)  
+        db.add(db_loan)
+        db.commit()
+        db.refresh(db_loan)
+    except Exception:
+        db.rollback()
+        raise
 
-    # -----------------------------------------------------------
-
-    db.refresh(db_loan)
-
-    invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
-    invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
-
+    # Log loan creation
     log_action(
         db=db,
         user_id=loan.borrower_id,
@@ -113,7 +131,149 @@ def create_loan(db: Session, loan: schemas.LoanCreate):
         loan_id=db_loan.id
     )
 
+    # Trigger dual signing process
+    try:
+        success, message, borrower_signing_url = initiate_dual_signing_for_loan(db, db_loan, callback_base_url)
+        
+        if success:
+            logger.info(f"Dual signing initiated for loan {db_loan.id}. Borrower signing URL: {borrower_signing_url}")
+            
+            log_action(
+                db=db,
+                user_id=loan.borrower_id,
+                action=AuditAction.LOAN_UPDATED,
+                description=f"Dual signing initiated for loan #{db_loan.id}",
+                loan_id=db_loan.id
+            )
+        else:
+            logger.error(f"Failed to initiate dual signing for loan {db_loan.id}: {message}")
+            
+            db_loan.sub_status = models.LoanSubStatus.signature_failed
+            db.commit()
+            db.refresh(db_loan)
+            
+            log_action(
+                db=db,
+                user_id=loan.borrower_id,
+                action=AuditAction.LOAN_UPDATED,
+                description=f"Dual signing failed for loan #{db_loan.id}: {message}",
+                loan_id=db_loan.id
+            )
+    except Exception as e:
+        logger.error(f"Exception during dual signing initiation for loan {db_loan.id}: {str(e)}")
+        
+        db.rollback()
+        db_loan.sub_status = models.LoanSubStatus.signature_failed
+        db.commit()
+        db.refresh(db_loan)
+        
+        log_action(
+            db=db,
+            user_id=loan.borrower_id,
+            action=AuditAction.LOAN_UPDATED,
+            description=f"Dual signing exception for loan #{db_loan.id}: {str(e)}",
+            loan_id=db_loan.id
+        )
+
+    invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
+    invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
+
     return db_loan
+
+
+
+def initiate_dual_signing_for_loan(db: Session, loan: models.Loan, callback_base_url: str = "http://localhost:8000"):
+    """
+    Initialize dual signing process for a loan
+    """
+    try:
+        # 🔒 Check for existing dual signing request
+        existing = get_dual_request(db, loan.id)
+        if existing:
+            if existing.status in [DualSigningStatus.FAILED, DualSigningStatus.CANCELLED]:
+                update_dual_request(db, loan.id, {
+                    "status": DualSigningStatus.PENDING_BORROWER,
+                    "error_message": None,
+                    "retry_count": 0
+                })
+                logger.info(f"[LOAN_ID:{loan.id}] Retrying dual signing")
+            else:
+                raise HTTPException(400, detail="Dual signing already in progress")
+
+        # ✅ Now continue
+        service = DualSigningService(
+            nsdl_client=get_nsdl_client(),
+            db=db,
+            pdf_merger=PDFMerger(),
+            document_generator=DocumentGenerator()
+        )
+
+        loan_data = {
+            "loan_id": str(loan.id),
+            "borrower_name": loan.borrower.name,
+            "borrower_email": loan.borrower.email,
+            "borrower_phone": loan.borrower.phone,
+            "lender_name": loan.lender.name,
+            "lender_email": loan.lender.email,
+            "lender_phone": loan.lender.phone,
+            "description": loan.description,
+            "principal_amount": str(loan.principal_amount),
+            "interest_rate": str(loan.interest_rate),
+            "payment_frequency": loan.payment_frequency,
+            "number_of_payments": loan.number_of_payments,
+            "start_date": loan.start_date.isoformat() if loan.start_date else None,
+            "due_date": loan.due_date.isoformat() if loan.due_date else None,
+        }
+
+        success, message, borrower_signing_url = service.create_and_initiate_dual_signing(
+            loan_data=loan_data,
+            callback_base_url=callback_base_url
+        )
+
+        return success, message, borrower_signing_url
+
+    except Exception as e:
+        logger.error(f"[LOAN_ID:{loan.id}] Error initiating dual signing: {str(e)}")
+        return False, f"Failed to initiate dual signing: {str(e)}", None
+
+
+
+
+def handle_dual_signing_completion(db: Session, loan_id: str):
+    """
+    Handle completion of dual signing process - called from dual signing callbacks
+    """
+    try:
+        loan = db.query(models.Loan).filter(models.Loan.id == int(loan_id)).first()
+        if not loan:
+            logger.error(f"Loan {loan_id} not found for dual signing completion")
+            return False
+
+        loan.status = models.LoanStatus.active
+        loan.sub_status = models.LoanSubStatus.fully_signed
+
+        db.commit()
+        db.refresh(loan)
+
+        log_action(
+            db=db,
+            user_id=loan.borrower_id,
+            action=AuditAction.LOAN_UPDATED,
+            description=f"Loan #{loan.id} fully signed and activated",
+            loan_id=loan.id
+        )
+
+        invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
+        invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
+
+        logger.info(f"Loan {loan_id} successfully activated after dual signing completion")
+        return True
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error handling dual signing completion for loan {loan_id}: {str(e)}")
+        return False
+
 
 
 @cache_result(expiration=1800)
@@ -179,15 +339,20 @@ def update_loan_status(db: Session, loan_id: int, new_status: models.LoanStatus,
             detail=f"Cannot transition from {loan.status.value} to {new_status.value}"
         )
 
-    loan.status = new_status
-    loan.sub_status = new_sub_status
-    db.commit()
-    db.refresh(loan)
+    try:
+        loan.status = new_status
+        loan.sub_status = new_sub_status
+        db.commit()
+        db.refresh(loan)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update loan status: {str(e)}")
 
     invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
     invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
 
     return loan
+
 
 
 def delete_loan(db: Session, loan_id: int):
@@ -198,16 +363,25 @@ def delete_loan(db: Session, loan_id: int):
                 status_code=400,
                 detail="Can only delete pending loans"
             )
-        db.delete(loan)
-        db.commit()
+        try:
+            db.delete(loan)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to delete loan: {str(e)}")
     return loan
+
 
 
 def update_loan_sub_status(db: Session, loan_id: int, sub_status: schemas.LoanSubStatus):
     loan = db.query(models.Loan).filter(models.Loan.id == loan_id).first()
     if not loan:
         return None
-    loan.sub_status = sub_status
-    db.commit()
-    db.refresh(loan)
+    try:
+        loan.sub_status = sub_status
+        db.commit()
+        db.refresh(loan)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update sub-status: {str(e)}")
     return loan

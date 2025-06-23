@@ -13,10 +13,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 def create_refresh_token(db: Session, user_id: int):
-    token = secrets.token_urlsafe(32)  # secure random string
-    expires = datetime.utcnow() + timedelta(days=7)
-    db_token = RefreshToken(user_id=user_id, token=token, expires_at=expires)
-    db.add(db_token)
-    db.commit()
-    db.refresh(db_token)
-    return db_token.token
+    try:
+        token = secrets.token_urlsafe(32)
+        expires = datetime.utcnow() + timedelta(days=7)
+        db_token = RefreshToken(user_id=user_id, token=token, expires_at=expires)
+        db.add(db_token)
+        db.commit()
+        db.refresh(db_token)
+        return db_token.token
+    except Exception:
+        db.rollback()
+        raise

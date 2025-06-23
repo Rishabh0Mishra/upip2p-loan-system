@@ -104,9 +104,14 @@ def create_refresh_token(db: Session, user_id: int):
     token_data = {"user_id": user_id, "exp": expire.isoformat()}
     token = jwt.encode(token_data, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     refresh_token = models.RefreshToken(user_id=user_id, token=token, expires_at=expire)
-    db.add(refresh_token)
-    db.commit()
+    try:
+        db.add(refresh_token)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create refresh token: {str(e)}")
     return token
+
 
 # ===================== #
 # 🔐 Token Validator
