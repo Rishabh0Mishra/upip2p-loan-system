@@ -181,6 +181,7 @@ class Payment(Base):
 
     due_date = Column(DateTime(timezone=True), nullable=False)   # <- datetime!
     paid_date = Column(DateTime(timezone=True), nullable=True)   # <- datetime!
+    emi_number = Column(Integer, nullable=False)  
 
     txn_reference = Column(String, nullable=True)
     principal_portion = Column(Float, nullable=False, default=0)

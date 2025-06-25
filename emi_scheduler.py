@@ -58,6 +58,7 @@ def create_repayment_schedule(db: Session, loan: Loan):
             amount=emi_amount,
             due_date=due_date,
             status=PaymentStatus.pending,
+            emi_number=i + 1 
         )
         db.add(payment)
 
@@ -66,5 +67,5 @@ def create_repayment_schedule(db: Session, loan: Loan):
     
     # Debug: Print all due dates for verification
     payments = db.query(Payment).filter(Payment.loan_id == loan.id).order_by(Payment.due_date).all()
-    for idx, payment in enumerate(payments, 1):
-        print(f"   EMI #{idx}: Due at {payment.due_date.strftime('%H:%M:%S')}")
+    for payment in payments:
+        print(f"   EMI #{payment.emi_number}: Due at {payment.due_date.strftime('%H:%M:%S')}")

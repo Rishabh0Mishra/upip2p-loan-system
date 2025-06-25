@@ -29,19 +29,28 @@ class SigningRequestStatus(PyEnum):
 class DualSigningRequest(Base):
     __tablename__ = "dual_signing_requests"
 
-    loan_id = Column(String, primary_key=True)
+    # 🔑 New auto-incrementing primary key
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+
+    # 👇 loan_id is now just unique, not PK
+    loan_id = Column(String, unique=True, nullable=False)
+
     borrower_name = Column(String, nullable=False)
     borrower_email = Column(String, nullable=False)
     borrower_phone = Column(String, nullable=False)
+
     lender_name = Column(String, nullable=False)
     lender_email = Column(String, nullable=False)
     lender_phone = Column(String, nullable=False)
+
     document_url = Column(Text, nullable=False)
     document_hash = Column(String, nullable=True)
 
     status = Column(Enum(DualSigningStatus), default=DualSigningStatus.PENDING_BORROWER)
+
     borrower_signing_request_id = Column(String, nullable=True)
     lender_signing_request_id = Column(String, nullable=True)
+
     borrower_signed_doc_url = Column(Text, nullable=True)
     lender_signed_doc_url = Column(Text, nullable=True)
     fully_signed_doc_url = Column(Text, nullable=True)
@@ -54,6 +63,7 @@ class DualSigningRequest(Base):
     error_message = Column(Text, nullable=True)
     retry_count = Column(Integer, default=0)
     max_retries = Column(Integer, default=3)
+    
 
 class SigningRequest(Base):
     __tablename__ = "signing_requests"

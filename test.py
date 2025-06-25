@@ -55,3 +55,31 @@
 
 # import pdfkit
 # print(pdfkit.configuration().wkhtmltopdf)
+
+# # scripts/backfill_emi_numbers.py
+
+# from sqlalchemy.orm import Session
+# from models import Payment
+# from database import SessionLocal
+
+# def backfill_emi_numbers():
+#     db: Session = SessionLocal()
+#     loan_ids = db.query(Payment.loan_id).distinct().all()
+
+#     for (loan_id,) in loan_ids:
+#         payments = (
+#             db.query(Payment)
+#             .filter(Payment.loan_id == loan_id)
+#             .order_by(Payment.due_date.asc())
+#             .all()
+#         )
+#         for idx, payment in enumerate(payments, 1):
+#             payment.emi_number = idx
+#             db.add(payment)
+
+#     db.commit()
+#     db.close()
+#     print("✅ emi_number backfill completed.")
+
+# if __name__ == "__main__":
+#     backfill_emi_numbers()

@@ -54,7 +54,7 @@ def process_due_emis(db: Session):
             payment.due_date = IST.localize(payment.due_date)
 
         time_overdue = (now - payment.due_date).total_seconds()
-        print(f"📆 Processing Payment #{payment.id} | Loan #{payment.loan_id}")
+        print(f"📆 Processing EMI #{payment.emi_number} | Loan #{payment.loan_id}")
         print(f"    Due: {payment.due_date.strftime('%H:%M:%S.%f')[:-3]} | Overdue by: {time_overdue:.1f}s")
         print(f"    Borrower: {borrower_id} | Amount: ₹{amount_due}")
 
@@ -83,7 +83,7 @@ def process_due_emis(db: Session):
                 loan_id=payment.loan_id
             )
 
-            print(f"✅ EMI Payment #{payment.id} completed successfully")
+            print(f"✅ EMI #{payment.emi_number} for Loan #{payment.loan_id} completed successfully")
         else:
             shortage = (amount_due - borrower_wallet).quantize(Decimal('0.01'))
 
@@ -101,7 +101,7 @@ def process_due_emis(db: Session):
                 loan_id=payment.loan_id
             )
 
-            print(f"❌ EMI Payment #{payment.id} failed - insufficient funds (short by ₹{shortage})")
+            print(f"❌ EMI #{payment.emi_number} for Loan #{payment.loan_id} failed - short by ₹{shortage}")
 
     if due_payments:
         db.commit()

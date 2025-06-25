@@ -19,7 +19,7 @@ import dual_signing_crud as crud
 from .nsdl_client import NSDLClient
 from .pdf_merger import PDFMerger
 from document_generator import DocumentGenerator
-
+from emi_scheduler import create_repayment_schedule  
 logger = logging.getLogger(__name__)
 
 
@@ -92,10 +92,10 @@ class DualSigningService:
             if existing_request:
                 if existing_request.status == DualSigningStatus.FULLY_SIGNED:
                     logger.warning(f"[LOAN_ID:{loan_id}] Loan agreement already fully signed")
-                    return False, "Loan agreement already fully signed", None
+                    return True, "Loan agreement already fully signed– no action taken", existing_request
                 elif existing_request.status in [DualSigningStatus.PENDING_BORROWER, DualSigningStatus.BORROWER_SIGNED]:
                     logger.warning(f"[LOAN_ID:{loan_id}] Dual signing already in progress")
-                    return False, "Dual signing already in progress", None
+                    return True, "Dual signing already in progress", existing_request
 
             # Create dual signing request
             dual_request = DualSigningRequest(
@@ -239,6 +239,11 @@ class DualSigningService:
 
             loan_id = signing_request.loan_id
             logger.info(f"[LOAN_ID:{loan_id}] Processing borrower signing callback")
+
+            # Verify this is a borrower signing request
+            if signing_request.signer_role != SignerRole.BORROWER:
+                logger.error(f"[LOAN_ID:{loan_id}] Invalid signer role for borrower callback: {signing_request.signer_role}")
+                return False, "Invalid signer role for borrower callback"
 
             if callback.is_successful():
                 # --- Update signing request ---
@@ -398,7 +403,7 @@ class DualSigningService:
         """Handle callback from lender signing completion"""
         signing_request = None
         loan_id = None
-        
+
         try:
             callback = SigningCallbackData(**callback_data)
 
@@ -407,9 +412,14 @@ class DualSigningService:
             if not signing_request:
                 logger.error(f"[REQUEST_ID:{callback.request_id}] Signing request not found")
                 return False, "Signing request not found"
-
+     
             loan_id = signing_request.loan_id
             logger.info(f"[LOAN_ID:{loan_id}] Processing lender signing callback")
+
+            # Verify this is a lender signing request
+            if signing_request.signer_role != SignerRole.LENDER:
+                logger.error(f"[LOAN_ID:{loan_id}] Invalid signer role for lender callback: {signing_request.signer_role}")
+                return False, "Invalid signer role for lender callback"
 
             if callback.is_successful():
                 # --- Update signing request ---
@@ -422,46 +432,53 @@ class DualSigningService:
                     }
                 )
 
-                # --- Fetch dual request ---
-                dual_request = crud.get_dual_request(self.db, signing_request.loan_id)
+                # --- Fetch dual signing request ---
+                dual_request = crud.get_dual_request(self.db, loan_id)
                 if dual_request:
-                    # Merge signed documents
                     merged_doc_url = None
-                    if dual_request.borrower_signed_doc_url and callback.signed_document_url:
+
+                    # --- Check if borrower signed successfully ---
+                    borrower_signing_request = crud.get_borrower_signing_request(self.db, loan_id)
+                    if borrower_signing_request and borrower_signing_request.status == SigningRequestStatus.SIGNED:
                         try:
-                            logger.info(f"[LOAN_ID:{loan_id}] Merging signed documents")
+                            logger.info(f"[LOAN_ID:{loan_id}] Merging borrower and lender signed documents")
                             merged_doc_url = self.pdf_merger.merge_signed_documents(
-                                dual_request.borrower_signed_doc_url,
+                                borrower_signing_request.signed_document_url,
                                 callback.signed_document_url,
-                                dual_request.loan_id
+                                loan_id
                             )
                         except Exception as merge_error:
                             logger.error(f"[LOAN_ID:{loan_id}] Failed to merge documents: {merge_error}")
-                            # Proceed with individual documents if merge fails
+                            # Still proceed with fallback
 
                     # --- Update dual signing request ---
                     crud.update_dual_request(
                         self.db,
-                        signing_request.loan_id,
+                        loan_id,
                         {
                             "status": DualSigningStatus.FULLY_SIGNED,
                             "lender_signed_at": datetime.utcnow(),
                             "lender_signed_doc_url": callback.signed_document_url,
-                            "fully_signed_doc_url": merged_doc_url
+                            "fully_signed_doc_url": merged_doc_url or callback.signed_document_url
                         }
                     )
 
-                    # --- Update loan status and agreement URL ---
-                    loan = self.db.query(Loan).filter(Loan.id == int(signing_request.loan_id)).first()
+                    # --- Update loan record ---
+                    loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
                     if loan:
                         loan.status = LoanStatus.active
                         loan.sub_status = LoanSubStatus.fully_signed
                         loan.signed_agreement_url = merged_doc_url or callback.signed_document_url
-                        logger.info(f"[LOAN_ID:{loan_id}] Updated loan status to active/fully_signed")
+                        logger.info(f"[LOAN_ID:{loan_id}] Loan status updated to active and fully_signed")
 
-                self.db.commit()
-                logger.info(f"[LOAN_ID:{loan_id}] Lender signing completed successfully - loan agreement fully signed")
-                return True, "Lender signing completed successfully. Loan agreement is now fully signed."
+                        self.db.commit()
+                        try:
+                           create_repayment_schedule(self.db, loan)
+                           logger.info(f"[LOAN_ID:{loan_id}] EMI schedule successfully created")
+                        except Exception as emi_err:
+                            logger.error(f"[LOAN_ID:{loan_id}] Failed to create EMI schedule: {emi_err}")
+                    logger.info(f"[LOAN_ID:{loan_id}] Lender signing completed successfully - agreement finalized")
+                    return True, "Lender signing completed successfully. Loan agreement is now fully signed."
 
             else:
                 # Signing failed — update both signing and dual requests
@@ -474,16 +491,14 @@ class DualSigningService:
                         "error_message": callback.error_message
                     }
                 )
-
                 crud.update_dual_request(
                     self.db,
-                    signing_request.loan_id,
+                    loan_id,
                     {
                         "status": DualSigningStatus.FAILED,
                         "error_message": f"Lender signing failed: {callback.error_message}"
                     }
                 )
-
                 self.db.commit()
                 return False, f"Lender signing failed: {callback.error_message}"
 
@@ -494,8 +509,6 @@ class DualSigningService:
             except Exception as rollback_error:
                 logger.error(f"Error during rollback: {str(rollback_error)}")
             return False, f"Error processing lender signing callback: {str(e)}"
-
-    # ... (rest of the methods remain the same)
 
     def get_dual_signing_status(self, loan_id: str) -> Optional[Dict[str, Any]]:
         """Get current status of dual signing process"""

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any
@@ -8,7 +8,10 @@ import os
 from .dual_signing_service import DualSigningService
 from .nsdl_client import NSDLClient, MockNSDLClient
 from .dual_signing_models import DualSigningStatus
-from dependencies import require_roles, get_db
+from dependencies import require_roles, get_db, get_current_user
+
+from models import SigningRequest, SignerRole, Loan
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -216,3 +219,39 @@ async def cleanup_expired_requests(
     except Exception as e:
         logger.error(f"Cleanup expired requests error: {e}")
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
+
+
+# ✅ NEW endpoint to get signing request ID
+class GetSigningRequestIdInput(BaseModel):
+    loan_id: int
+
+@router.post("/get-request-id", tags=["Dual Signing"])
+def get_own_signing_request_id(
+    payload: GetSigningRequestIdInput,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    loan = db.query(Loan).filter(Loan.id == payload.loan_id).first()
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found.")
+
+    if loan.borrower_id == current_user.id:
+        role = SignerRole.BORROWER
+    elif loan.lender_id == current_user.id:
+        role = SignerRole.LENDER
+    else:
+        raise HTTPException(status_code=403, detail="You are not part of this loan.")
+
+    signing_request = db.query(SigningRequest).filter(
+        SigningRequest.loan_id == loan.id,
+        SigningRequest.signer_role == role
+    ).first()
+
+    if not signing_request:
+        raise HTTPException(status_code=404, detail="Signing request not found.")
+
+    return {
+        "loan_id": loan.id,
+        "signer_role": role.value,
+        "signing_request_id": signing_request.request_id
+    }
