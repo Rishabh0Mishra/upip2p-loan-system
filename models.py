@@ -69,6 +69,7 @@ transaction_status_enum = PG_ENUM(
 
 class User(Base):
     __tablename__ = "users"
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     email = Column(String, nullable=False)
@@ -79,10 +80,15 @@ class User(Base):
     is_verified = Column(Boolean, default=False)
     deleted_at = Column(DateTime, nullable=True)
 
+    # 🔥 Risk rating fields
+    risk_score = Column(Float, nullable=True, default=75.0)
+    risk_score_updated_at = Column(DateTime(timezone=True), nullable=True)
+
     tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
     email_verification = relationship("EmailVerificationToken", back_populates="user", uselist=False, cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     wallet = relationship("Wallet", back_populates="user", uselist=False)
+
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"

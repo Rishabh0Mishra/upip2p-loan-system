@@ -4,7 +4,7 @@ from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
 import re
-
+from typing import Dict
 # ==== ENUMS ====
 
 class RoleType(str, Enum):
@@ -356,9 +356,9 @@ class PaymentOut(BaseModel):
     id: int
     loan_id: int
     amount: float
-    due_date: date
+    due_date: datetime
     status: str
-    paid_date: Optional[date] = None
+    paid_date: Optional[datetime] = None  # ← FIXED HERE
     txn_reference: Optional[str]
     principal_portion: float
     interest_portion: float
@@ -369,6 +369,7 @@ class PaymentOut(BaseModel):
     class Config:
         from_attributes = True
 
+
 class RepaymentRetryResponse(BaseModel):
     id: int
     payment_id: int
@@ -378,3 +379,14 @@ class RepaymentRetryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class RiskScoreResponse(BaseModel):
+    user_id: int
+    current_risk_score: float
+    risk_category: str
+    total_payments: int
+    punctuality_score: float
+    payment_history_score: float
+    recent_performance_score: float
+    last_updated: Optional[datetime]
+    components: Dict[str, str]

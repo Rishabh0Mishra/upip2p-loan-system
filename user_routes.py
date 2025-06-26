@@ -6,6 +6,9 @@ import schemas, models
 import uuid
 from audit import log_action
 from models import AuditAction
+from risk_service import calculate_risk_score, get_risk_score_breakdown
+from schemas import RiskScoreResponse
+
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -131,3 +134,12 @@ def verify_email(token: str, db: Session = Depends(get_db)):
 
     return {"msg": "Email verified successfully", "verified": user.is_verified}
 
+
+@user_router.get("/risk-score/{user_id}", response_model=RiskScoreResponse)
+def get_user_risk_score(user_id: int, db: Session = Depends(get_db)):
+    score = calculate_risk_score(db, user_id)
+    if score is None:
+        raise HTTPException(status_code=404, detail="User not found or score not available")
+    
+    breakdown = get_risk_score_breakdown(db, user_id)
+    return breakdown
