@@ -28,3 +28,4 @@ dump.rdb/
 *.log
 *.log.*
 
+test_agreement.py
