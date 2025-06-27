@@ -29,6 +29,16 @@ from email_utils import send_email
 from logging_config import StructuredLogger
 from emi_worker import run_worker
 
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Your frontend dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Routers
 from admin_routes import admin_router
 from borrower_routes import borrower_router
@@ -57,7 +67,7 @@ from dependencies import (
 )
 from utils import sanitize_input
 
-app = FastAPI()
+
 
 # Logging
 logger = logging.getLogger("uvicorn.error")
@@ -117,14 +127,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestLoggingMiddleware)
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://yourdomain.com"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Trusted Host
 app.add_middleware(
