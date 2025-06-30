@@ -32,6 +32,17 @@ class DualSigningService:
         self.document_generator = document_generator or DocumentGenerator()
         self.db = db
 
+    def _safe_commit(self, loan_id: str = None) -> bool:
+        """Safely commit with automatic rollback on failure"""
+        try:
+            self.db.commit()
+            return True
+        except Exception as commit_err:
+            self.db.rollback()
+            log_prefix = f"[LOAN_ID:{loan_id}] " if loan_id else ""
+            logger.error(f"{log_prefix}Commit failed: {commit_err}")
+            return False
+
     def create_and_initiate_dual_signing(self, loan_data: Dict[str, Any],
                                          callback_base_url: str = "http://localhost:8000") -> Tuple[bool, str, Optional[str]]:
         """
@@ -130,7 +141,8 @@ class DualSigningService:
                         status=DualSigningStatus.FAILED,
                         error_message=message
                     )
-                    self.db.commit()
+                    if not self._safe_commit(loan_id):
+                        logger.error(f"[LOAN_ID:{loan_id}] Failed to update dual request status in DB")
                 except SQLAlchemyError as db_error:
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to update dual request status: {str(db_error)}")
                     self.db.rollback()
@@ -199,7 +211,10 @@ class DualSigningService:
                     }
                 )
                 
-                self.db.commit()
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing initiation")
+                    return False, "Failed to save borrower signing request", None
+                
                 logger.info(f"[LOAN_ID:{loan_id}] Borrower signing initiated successfully")
                 return True, "Borrower signing initiated", nsdl_response.signing_url
             else:
@@ -212,7 +227,8 @@ class DualSigningService:
                         "error_message": nsdl_response.error_message
                     }
                 )
-                self.db.commit()
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit failed borrower signing status")
                 return False, f"Failed to initiate borrower signing: {nsdl_response.error_message}", None
 
         except Exception as e:
@@ -276,7 +292,10 @@ class DualSigningService:
                         self.db.rollback()
                         return False, lender_message
 
-                self.db.commit()
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing completion")
+                    return False, "Failed to save borrower signing completion"
+                
                 logger.info(f"[LOAN_ID:{loan_id}] Borrower signing completed successfully")
                 return True, "Borrower signing completed successfully"
 
@@ -301,7 +320,10 @@ class DualSigningService:
                     }
                 )
 
-                self.db.commit()
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing failure")
+                    return False, "Failed to save borrower signing failure"
+                
                 return False, f"Borrower signing failed: {callback.error_message}"
 
         except Exception as e:
@@ -471,12 +493,19 @@ class DualSigningService:
                         loan.signed_agreement_url = merged_doc_url or callback.signed_document_url
                         logger.info(f"[LOAN_ID:{loan_id}] Loan status updated to active and fully_signed")
 
-                        self.db.commit()
+                        # FIXED: Safe commit with rollback handling
+                        if not self._safe_commit(loan_id):
+                            logger.error(f"[LOAN_ID:{loan_id}] Failed to commit loan status update")
+                            return False, "Failed to update loan status in database"
+                        
+                        # Create EMI schedule after successful commit
                         try:
-                           create_repayment_schedule(self.db, loan)
-                           logger.info(f"[LOAN_ID:{loan_id}] EMI schedule successfully created")
+                            create_repayment_schedule(self.db, loan)
+                            logger.info(f"[LOAN_ID:{loan_id}] EMI schedule successfully created")
                         except Exception as emi_err:
                             logger.error(f"[LOAN_ID:{loan_id}] Failed to create EMI schedule: {emi_err}")
+                            # EMI schedule failure shouldn't rollback the loan signing completion
+                            
                     logger.info(f"[LOAN_ID:{loan_id}] Lender signing completed successfully - agreement finalized")
                     return True, "Lender signing completed successfully. Loan agreement is now fully signed."
 
@@ -499,7 +528,12 @@ class DualSigningService:
                         "error_message": f"Lender signing failed: {callback.error_message}"
                     }
                 )
-                self.db.commit()
+                
+                # FIXED: Safe commit with rollback handling
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit lender signing failure")
+                    return False, "Failed to save lender signing failure"
+                
                 return False, f"Lender signing failed: {callback.error_message}"
 
         except Exception as e:
@@ -567,12 +601,18 @@ class DualSigningService:
                             "status": DualSigningStatus.PENDING_BORROWER
                         }
                     )
-                self.db.commit()
+                # FIXED: Safe commit with rollback handling
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower retry")
+                    return False, "Failed to save retry attempt"
                 return success, message
 
             elif dual_request.status == DualSigningStatus.BORROWER_SIGNED:
                 success, message = self._initiate_lender_signing(dual_request)
-                self.db.commit()
+                # FIXED: Safe commit with rollback handling
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit lender retry")
+                    return False, "Failed to save retry attempt"
                 return success, message
             
             return False, "Cannot retry in current status"
@@ -606,7 +646,11 @@ class DualSigningService:
                 }
             )
             
-            self.db.commit()
+            # FIXED: Safe commit with rollback handling
+            if not self._safe_commit(loan_id):
+                logger.error(f"[LOAN_ID:{loan_id}] Failed to commit cancellation")
+                return False, "Failed to save cancellation"
+            
             logger.info(f"[LOAN_ID:{loan_id}] Dual signing cancelled: {reason}")
             return True, "Dual signing cancelled successfully"
             

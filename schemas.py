@@ -390,3 +390,16 @@ class RiskScoreResponse(BaseModel):
     recent_performance_score: float
     last_updated: Optional[datetime]
     components: Dict[str, str]
+    
+class LenderLoanRequestOut(BaseModel):
+    id: int
+    borrower_name: str
+    amount: float
+    duration_months: int
+    risk_score: int
+    reason: str
+
+    class Config:
+        from_attributes = True  
+
+    

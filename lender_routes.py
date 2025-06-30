@@ -47,7 +47,7 @@ def lender_dashboard(
     }
 
 
-@lender_router.get("/loan-requests", response_model=list[schemas.LoanResponse])
+@lender_router.get("/loan-requests", response_model=list[schemas.LenderLoanRequestOut])
 def get_pending_loan_requests(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles(["lender"]))
@@ -56,7 +56,28 @@ def get_pending_loan_requests(
         models.Loan.lender_id == current_user.id,
         models.Loan.status == LoanStatus.pending
     ).all()
-    return loans
+
+    enriched = []
+    for loan in loans:
+        borrower = db.query(models.User).filter(models.User.id == loan.borrower_id).first()
+
+        borrower_name = borrower.name if borrower and borrower.name else f"User#{loan.borrower_id}"
+        risk_score = int(round(borrower.risk_score)) if borrower and borrower.risk_score is not None else 50
+        reason = loan.reason if hasattr(loan, "reason") and loan.reason else "General purpose"
+
+        enriched.append({
+            "id": loan.id,
+            "borrower_name": borrower_name,
+            "amount": float(loan.principal_amount),
+            "duration_months": loan.number_of_payments,
+            "risk_score": risk_score,
+            "reason": reason
+        })
+
+    return enriched
+
+
+
 
 
 @lender_router.post("/loan-requests/{loan_id}/accept", response_model=schemas.LoanResponse)

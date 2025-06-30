@@ -204,21 +204,49 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/token")
 @limiter.limit("5/minute")
-async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login_for_access_token(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect email or password")
-    access_token = create_access_token(data={"sub": user.email})
+    
+    access_token = create_access_token(data={
+        "sub": user.email,
+        "role": user.role  # 👈 Add this
+    })
+
     refresh_token = create_refresh_token(db, user.id)
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
 
 @app.post("/refresh-token")
 def refresh_access_token(request: schemas.TokenRequest, db: Session = Depends(get_db)):
-    token_obj = db.query(models.RefreshToken).filter(models.RefreshToken.token == request.refresh_token).first()
+    token_obj = db.query(models.RefreshToken).filter(
+        models.RefreshToken.token == request.refresh_token
+    ).first()
+
     if not token_obj or token_obj.revoked or token_obj.expires_at < datetime.utcnow():
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    access_token = create_access_token(data={"sub": token_obj.user.email})
-    return {"access_token": access_token, "token_type": "bearer"}
+
+    user = token_obj.user  # 👈 fetch user object
+
+    access_token = create_access_token(data={
+        "sub": user.email,
+        "role": user.role  # 👈 include role here too
+    })
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
 
 @app.post("/logout")
 def logout(request: schemas.TokenRequest, db: Session = Depends(get_db)):
