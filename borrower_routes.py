@@ -88,17 +88,8 @@ def request_loan(
 
     # Step 1: Create loan in DB
     db_loan = crud_loan.create_loan(db, loan)
-
-    # Step 2: Initiate dual e-signing
-    try:
-        from dual_signing.dual_signing_service import initiate_after_borrower_request
-        initiate_after_borrower_request(db, db_loan)
-    except Exception as e:
-        # Log but don't crash the request
-        logger.error(f"Failed to initiate dual signing for loan {db_loan.id}: {str(e)}")
-
-
-    # Step 3: Log action
+    
+    # Step 2: Log action
     log_action(
         db,
         user_id=current_user.id,
@@ -106,5 +97,5 @@ def request_loan(
         description=f"Loan request #{db_loan.id} created by borrower"
     )
 
-    # Step 4: Return loan data
+    # Step 3: Return loan data
     return db_loan

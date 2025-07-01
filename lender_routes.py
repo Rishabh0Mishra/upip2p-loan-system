@@ -11,6 +11,17 @@ from emi_scheduler import create_repayment_schedule
 from exceptions import InsufficientFundsException
 from models import AuditAction, LoanStatus, LoanSubStatus
 
+
+from dual_signing.dual_signing_service import DualSigningService
+from dual_signing.nsdl_client import get_nsdl_client
+from dual_signing.pdf_merger import PDFMerger
+from document_generator import DocumentGenerator
+from dual_signing_crud import get_dual_request, update_dual_request
+from dual_signing.dual_signing_models import DualSigningStatus
+from fastapi.requests import Request
+
+from document_generator import DocumentGenerator
+from dual_signing.dual_signing_service import get_dual_signing_service
 lender_router = APIRouter(prefix="/lender", tags=["lender"])
 
 
@@ -79,7 +90,6 @@ def get_pending_loan_requests(
 
 
 
-
 @lender_router.post("/loan-requests/{loan_id}/accept", response_model=schemas.LoanResponse)
 def accept_loan_request(
     loan_id: int,
@@ -103,33 +113,70 @@ def accept_loan_request(
         raise InsufficientFundsException("Insufficient balance to accept this loan.")
 
     try:
+        # 💸 Deduct funds
         lender_wallet.balance -= principal
         db.commit()
 
+        # 🧮 Calculate EMI & update loan
         rate = loan.interest_rate
         n = loan.number_of_payments
         time_years = Decimal(n) / Decimal("12")
-
         total_amount = principal + (principal * rate * time_years)
         payment_amount = total_amount / Decimal(n)
 
         loan.total_amount = total_amount.quantize(Decimal("0.01"))
         loan.payment_amount = payment_amount.quantize(Decimal("0.01"))
-        loan.status = LoanStatus.active
-        loan.sub_status = LoanSubStatus.none
-
+        loan.status = LoanStatus.accepted
+        loan.sub_status = LoanSubStatus.pending_signature
         db.commit()
         db.refresh(loan)
 
-        create_repayment_schedule(db, loan)
+        # 📄 Generate agreement PDF
+        generator = DocumentGenerator()
+        document_path = generator.generate_loan_agreement({
+            "loan_id": loan.id,
+            "lender_name": loan.lender.name,
+            "lender_email": loan.lender.email,
+            "lender_phone": loan.lender.phone,
+            "borrower_name": loan.borrower.name,
+            "borrower_email": loan.borrower.email,
+            "borrower_phone": loan.borrower.phone,
+            "principal_amount": str(loan.principal_amount),
+            "interest_rate": str(loan.interest_rate),
+            "number_of_payments": loan.number_of_payments,
+            "payment_frequency": loan.payment_frequency,
+            "description": loan.description,
+            "start_date": loan.start_date.strftime('%Y-%m-%d')
+        })
 
+        # 🖊️ Initiate dual signing
+        service = get_dual_signing_service(db)
+        success, message, signing_url = service.initiate_dual_signing(
+            loan_id=loan.id,
+            borrower_name=loan.borrower.name,
+            borrower_email=loan.borrower.email,
+            borrower_phone=loan.borrower.phone,
+            lender_name=loan.lender.name,
+            lender_email=loan.lender.email,
+            lender_phone=loan.lender.phone,
+            document_url=document_path,
+            callback_base_url="http://localhost:8000"
+        )
+
+        if not success:
+            loan.sub_status = LoanSubStatus.signature_failed
+            db.commit()
+            db.refresh(loan)
+            raise HTTPException(status_code=500, detail=f"Signing failed: {message}")
+
+        # 🧾 Audit
         log_action(
             db=db,
             user_id=current_user.id,
             action=AuditAction.LOAN_STATUS_UPDATED,
             description={
                 "loan_id": loan.id,
-                "action": "Loan accepted",
+                "action": "Loan approved, signing initiated",
                 "new_lender_balance": str(lender_wallet.balance)
             },
             loan_id=loan.id
@@ -139,7 +186,8 @@ def accept_loan_request(
 
     except (SQLAlchemyError, Exception) as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Loan activation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Loan approval failed: {str(e)}")
+
 
 
 @lender_router.post("/loan-requests/{loan_id}/reject", response_model=schemas.LoanResponse)

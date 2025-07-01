@@ -734,3 +734,21 @@ def initiate_after_borrower_request(db: Session, loan: Loan):
         except Exception as rollback_error:
             logger.error(f"Error during rollback for loan {loan_id}: {str(rollback_error)}")
         raise Exception(f"Dual signing initiation failed: {str(e)}")
+    
+
+def get_dual_signing_service(db: Session) -> DualSigningService:
+    """
+    Factory function to create a properly configured DualSigningService instance
+    """
+    # Import exactly like your initiate_after_borrower_request function does:
+    from dual_signing.nsdl_client import get_nsdl_client
+    from document_generator import DocumentGenerator
+    from dual_signing.pdf_merger import PDFMerger
+    
+    return DualSigningService(
+        nsdl_client=get_nsdl_client(),
+        db=db,
+        pdf_merger=PDFMerger(),
+        document_generator=DocumentGenerator()
+    )
+    

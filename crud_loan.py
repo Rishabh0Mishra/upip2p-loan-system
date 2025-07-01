@@ -77,7 +77,7 @@ def get_wallet(db: Session, user_id: int):
 
 def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = "http://localhost:8000"):
     """
-    Create a loan and automatically trigger dual signing process.
+    Create a loan without initiating dual signing. Signing happens after lender approval.
     """
     validate_loan_data(loan)
     lender, borrower = validate_users_exist(db, loan.lender_id, loan.borrower_id)
@@ -111,7 +111,7 @@ def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = 
             start_date=start_date,
             due_date=due_date,
             status=models.LoanStatus.pending,
-            sub_status=models.LoanSubStatus.pending_signature
+            sub_status=models.LoanSubStatus.none  # don't jump ahead to signing
         )
         db.add(db_loan)
         db.commit()
@@ -127,51 +127,6 @@ def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = 
         description=f"Loan request #{db_loan.id} created by borrower",
         loan_id=db_loan.id
     )
-
-    try:
-        success, message, borrower_signing_url = initiate_dual_signing_for_loan(db, db_loan, callback_base_url)
-
-        if success:
-            logger.info(f"Dual signing initiated for loan {db_loan.id}. Borrower signing URL: {borrower_signing_url}")
-            log_action(
-                db=db,
-                user_id=loan.borrower_id,
-                action=AuditAction.LOAN_UPDATED,
-                description=f"Dual signing initiated for loan #{db_loan.id}",
-                loan_id=db_loan.id
-            )
-        else:
-            logger.error(f"Failed to initiate dual signing for loan {db_loan.id}: {message}")
-            db_loan.sub_status = models.LoanSubStatus.signature_failed
-            db.commit()
-            db.refresh(db_loan)
-            log_action(
-                db=db,
-                user_id=loan.borrower_id,
-                action=AuditAction.LOAN_UPDATED,
-                description=f"Dual signing failed for loan #{db_loan.id}: {message}",
-                loan_id=db_loan.id
-            )
-
-    except Exception as e:
-        logger.error(f"Exception during dual signing initiation for loan: {str(e)}")
-        try:
-            db.rollback()
-            merged_loan = db.merge(db_loan)
-            merged_loan.sub_status = models.LoanSubStatus.signature_failed
-            db.commit()
-            db.refresh(merged_loan)
-
-            log_action(
-                db=db,
-                user_id=loan.borrower_id,
-                action=AuditAction.LOAN_UPDATED,
-                description=f"Dual signing exception for loan #{merged_loan.id}: {str(e)}",
-                loan_id=merged_loan.id
-            )
-        except Exception as db_err:
-            logger.error(f"Failed to recover loan after signing exception: {db_err}")
-            db.rollback()
 
     invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
     invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")

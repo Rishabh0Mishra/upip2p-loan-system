@@ -9,8 +9,6 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
-import os
-
 class DocumentGenerator:
     def __init__(self, template_path: str = None, output_storage_path: str = None):
         """
