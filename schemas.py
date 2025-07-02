@@ -145,19 +145,7 @@ class LoanUpdate(BaseModel):
     payment_frequency: Optional[PaymentFrequency] = None
     number_of_payments: Optional[int] = Field(None, gt=0)
 
-class LoanResponse(BaseModel):
-    id: int
-    lender_id: int
-    borrower_id: int
-    principal_amount: Optional[Decimal]
-    interest_rate: Optional[Decimal]
-    payment_frequency: Optional[PaymentFrequency]
-    number_of_payments: Optional[int]
-    status: str
-    sub_status: Optional[str] = None
 
-    class Config:
-        from_attributes = True
 
 # ==== PAYMENT MODELS ====
 
@@ -174,8 +162,8 @@ class PaymentResponse(BaseModel):
     loan_id: int
     amount: Decimal
     status: PaymentStatus
-    due_date: date
-    paid_date: Optional[date] = None
+    due_date: datetime
+    paid_date: Optional[datetime] = None
     payment_method: Optional[str] = None
     transaction_id: Optional[str] = None
     principal_portion: Optional[Decimal] = None
@@ -187,6 +175,20 @@ class PaymentResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class LoanResponse(BaseModel):
+    id: int
+    lender_id: int
+    borrower_id: int
+    principal_amount: Optional[Decimal]
+    interest_rate: Optional[Decimal]
+    payment_frequency: Optional[PaymentFrequency]
+    number_of_payments: Optional[int]
+    status: str
+    sub_status: Optional[str] = None
+    payments: list[PaymentResponse] = [] 
+
+    class Config:
+        from_attributes = True
 # ==== NOTIFICATIONS ====
 
 class NotificationCreate(BaseModel):

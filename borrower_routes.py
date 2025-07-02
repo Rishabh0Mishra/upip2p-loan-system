@@ -20,7 +20,10 @@ def borrower_dashboard(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles(["borrower"]))
 ):
-    loans = crud_loan.get_loans_by_user(db, current_user.id)
+    loans = [
+        schemas.LoanResponse.model_validate(loan)
+        for loan in crud_loan.get_loans_by_user(db, current_user.id)
+    ]
 
     active_loans = [loan for loan in loans if loan.status == models.LoanStatus.active]
     pending_requests = [loan for loan in loans if loan.status == models.LoanStatus.pending]
@@ -31,12 +34,13 @@ def borrower_dashboard(
         Decimal("0.00")
     )
 
-    total_repaid = Decimal("0.00")
-    for loan in loans:
-        if loan.status in [models.LoanStatus.active, models.LoanStatus.completed]:
-            for payment in loan.payments:
-                if payment.status == models.PaymentStatus.completed:
-                    total_repaid += Decimal(str(payment.amount)) + Decimal(str(payment.late_fee or 0))
+    total_repaid = sum(
+        Decimal(str(payment.amount)) + Decimal(str(payment.late_fee or 0))
+        for loan in loans
+        if loan.status in [models.LoanStatus.active, models.LoanStatus.completed]
+        for payment in loan.payments
+        if payment.status == models.PaymentStatus.completed
+    )
 
     next_due = (
         db.query(models.Payment)
@@ -50,23 +54,9 @@ def borrower_dashboard(
     wallet = db.query(models.Wallet).filter(models.Wallet.user_id == current_user.id).first()
     wallet_balance = wallet.balance if wallet else Decimal("0.00")
 
-    def loan_to_response(loan: models.Loan):
-        return schemas.LoanResponse(
-            id=loan.id,
-            borrower_id=loan.borrower_id,
-            lender_id=loan.lender_id,
-            principal_amount=loan.principal_amount,
-            interest_rate=loan.interest_rate,
-            payment_frequency=loan.payment_frequency,
-            number_of_payments=loan.number_of_payments,
-            status=loan.status,
-            created_at=loan.created_at,
-            updated_at=loan.updated_at,
-        )
-
     return schemas.BorrowerDashboard(
-        active_loans=[loan_to_response(loan) for loan in active_loans],
-        pending_requests=[loan_to_response(loan) for loan in pending_requests],
+        active_loans=active_loans,
+        pending_requests=pending_requests,
         completed_loans_count=len(completed_loans),
         total_borrowed=total_borrowed,
         total_repaid=total_repaid,

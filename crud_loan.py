@@ -263,12 +263,17 @@ def get_loans(db: Session, skip: int = 0, limit: int = 100):
 
 @cache_result(expiration=1800)
 def get_loans_by_user(db: Session, user_id: int):
-    return db.query(models.Loan)\
+    loans = db.query(models.Loan)\
         .options(joinedload(models.Loan.payments))\
         .filter(
             (models.Loan.lender_id == user_id) |
             (models.Loan.borrower_id == user_id)
         ).all()
+
+    return [
+        schemas.LoanResponse.model_validate(loan, from_attributes=True)
+        for loan in loans
+    ]
 
 
 def can_transition_status(current_status: models.LoanStatus, new_status: models.LoanStatus) -> bool:

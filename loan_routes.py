@@ -67,7 +67,6 @@ def list_loans(
     loans = crud_loan.get_loans(db)
     return [schemas.LoanResponse.from_orm(loan) for loan in loans]
 
-
 @router.patch("/{loan_id}", response_model=schemas.LoanResponse)
 def update_loan_status(
     loan_id: int,
@@ -87,28 +86,40 @@ def update_loan_status(
             raise HTTPException(status_code=403, detail="Not authorized to update this loan")
 
         if loan_update.status:
-            # Check lender balance and transfer funds if activating the loan
+            # 💰 If activating loan, transfer funds from lender to borrower
             if loan_update.status == "active":
-                lender_balance = get_wallet_balance(loan.lender_id)
+                lender_balance = get_wallet_balance(db, loan.lender_id)
                 if lender_balance < loan.principal_amount:
                     raise HTTPException(
                         status_code=400,
                         detail="Lender has insufficient funds to activate the loan"
                     )
-                update_wallet_balance(loan.lender_id, -loan.principal_amount)
-                update_wallet_balance(loan.borrower_id, loan.principal_amount)
 
+                update_wallet_balance(db, loan.lender_id, -loan.principal_amount)
+                update_wallet_balance(db, loan.borrower_id, loan.principal_amount)
+
+                log_action(
+                    db,
+                    user_id=loan.lender_id,
+                    action=AuditAction.WALLET_DEBITED,
+                    description=f"₹{loan.principal_amount} transferred from lender #{loan.lender_id} to borrower #{loan.borrower_id} for Loan #{loan.id}"
+                )
+
+            # ✅ Update status
             loan = crud_loan.update_loan_status(db, loan_id, loan_update.status)
 
+            # 🔔 Send appropriate notifications
             if loan_update.status == "approved":
                 NotificationService(db).send_loan_approved_notification(loan)
             elif loan_update.status == "rejected":
                 NotificationService(db).send_loan_rejected_notification(loan)
 
+            # 💾 Refresh loan state after activation
             if loan_update.status == "active":
                 db.commit()
                 db.refresh(loan)
 
+        # 🧾 Create EMI schedule only once
         if loan.status == "active":
             existing_payments = db.query(models.Payment).filter(models.Payment.loan_id == loan.id).count()
             if existing_payments == 0:
@@ -140,6 +151,7 @@ def update_loan_status(
                         amount=emi_amount,
                         due_date=due_date,
                         status=PaymentStatus.pending,
+                        emi_number=i + 1
                     )
                     db.add(payment)
 
