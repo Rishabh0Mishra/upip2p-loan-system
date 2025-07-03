@@ -179,14 +179,17 @@ def search_loans(
 
 
 # ------------------------- MANUAL EMI PAYMENT -------------------------
-
 @router.post("/borrower/pay-emi/{payment_id}", response_model=schemas.PaymentOut)
-def pay_emi(payment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def pay_emi(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
     """
-    GOAL: Let the borrower manually pay the next pending EMI using wallet balance
+    Borrower manually pays the next pending EMI from wallet.
     """
     try:
-        # 🔒 Step 1: Authenticate and Authorize
+        # 🔒 Step 1: Auth & Validation
         payment = (
             db.query(models.Payment)
             .options(joinedload(models.Payment.loan))
@@ -194,64 +197,66 @@ def pay_emi(payment_id: int, db: Session = Depends(get_db), current_user: models
             .first()
         )
         if not payment:
-            raise HTTPException(status_code=404, detail="Payment not found")
+            raise HTTPException(status_code=404, detail={"detail": "Payment not found", "code": "payment_not_found"})
+        
         if not payment.loan:
-            raise HTTPException(status_code=404, detail="Associated loan not found")
-        if payment.loan.borrower_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Unauthorized: Not your loan")
-        if payment.status == PaymentStatus.completed:
-            raise HTTPException(status_code=400, detail="EMI already paid")
+            raise HTTPException(status_code=404, detail={"detail": "Associated loan not found", "code": "loan_not_found"})
 
-        # 🔍 Step 2: Enforce EMI payment order (using emi_number, not due_date)
-        next_pending_emi = (
+        if payment.loan.borrower_id != current_user.id:
+            raise HTTPException(status_code=403, detail={"detail": "You are not the borrower for this loan", "code": "unauthorized_user"})
+
+        if payment.status == PaymentStatus.completed:
+            raise HTTPException(status_code=400, detail={"detail": "EMI already paid", "code": "already_paid"})
+
+        # 🔁 Step 2: Enforce sequential EMI payments
+        next_emi = (
             db.query(models.Payment)
-            .filter(
-                models.Payment.loan_id == payment.loan_id,
-                models.Payment.status == PaymentStatus.pending
-            )
-            .order_by(models.Payment.emi_number.asc())  # 👈 fix: respect payment order, not time
+            .filter(models.Payment.loan_id == payment.loan_id, models.Payment.status == PaymentStatus.pending)
+            .order_by(models.Payment.emi_number.asc())
             .first()
         )
-        if not next_pending_emi:
-            raise HTTPException(status_code=400, detail="No pending EMIs found for this loan")
-        if payment.id != next_pending_emi.id:
-            raise HTTPException(
-                status_code=400,
-                detail="Only the next pending EMI can be paid. Please pay in order."
-            )
+        if not next_emi:
+            raise HTTPException(status_code=400, detail={"detail": "No pending EMIs for this loan", "code": "no_pending_emi"})
+        
+        if payment.id != next_emi.id:
+            raise HTTPException(status_code=400, detail={
+                "detail": "You must pay EMIs in order. This is not the next pending EMI.",
+                "code": "invalid_payment_order"
+            })
 
-        # 💰 Step 3: Wallet check
+        # 💰 Step 3: Wallet & Amount check
         amount_due = round(payment.amount + (payment.late_fee or 0), 2)
-        borrower_wallet_balance = get_wallet_balance(db,current_user.id)
-        if borrower_wallet_balance < amount_due:
+        borrower_wallet = get_wallet_balance(db, current_user.id)
+
+        if borrower_wallet < amount_due:
             db.add(models.PaymentRetryLog(
                 payment_id=payment.id,
                 status=PaymentRetryStatus.failed,
-                notes=f"Manual payment failed: Insufficient funds. Required: {amount_due}, Available: {borrower_wallet_balance}"
+                notes=f"Manual payment failed: Insufficient funds. Required: {amount_due}, Available: {borrower_wallet}"
             ))
             log_action(db, user_id=current_user.id, action=AuditAction.MANDATE_FAILED, payment_id=payment.id)
             db.commit()
-            raise HTTPException(status_code=402, detail=f"Insufficient funds. Required: ₹{amount_due}")
+            raise HTTPException(status_code=402, detail={
+                "detail": f"Insufficient funds. Required ₹{amount_due}, Available ₹{borrower_wallet}",
+                "code": "insufficient_funds"
+            })
 
-        # 🔁 Step 4: Mark paid, transfer funds
+        # ✅ Step 4: Deduct & Mark as Paid
+        update_wallet_balance(db, current_user.id, -amount_due)
+        update_wallet_balance(db, payment.loan.lender_id, amount_due)
+
         payment.status = PaymentStatus.completed
         payment.paid_date = datetime.now(IST)
         payment.txn_reference = f"MAN_{payment.loan_id}_{payment.id}_{int(datetime.now().timestamp())}"
-        update_wallet_balance(db,current_user.id, -amount_due)
-        update_wallet_balance(db,payment.loan.lender_id, amount_due)
 
         db.add(models.PaymentRetryLog(
             payment_id=payment.id,
             status=PaymentRetryStatus.success,
-            notes=f"Manual payment successful. Amount: ₹{amount_due}"
+            notes=f"Manual EMI paid successfully. Amount ₹{amount_due}"
         ))
-        log_action(
-            db,
-            user_id=current_user.id,
-            action=AuditAction.PAYMENT_MADE,
-            payment_id=payment.id,
-            description=f"Manual EMI payment successful: ₹{amount_due} for loan #{payment.loan_id}"
-        )
+        log_action(db, user_id=current_user.id, action=AuditAction.PAYMENT_MADE, payment_id=payment.id,
+                    description=f"Paid EMI #{payment.emi_number} for Loan #{payment.loan_id}: ₹{amount_due}")
+        
         db.commit()
         db.refresh(payment)
         return payment
@@ -260,8 +265,10 @@ def pay_emi(payment_id: int, db: Session = Depends(get_db), current_user: models
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Payment processing failed: {str(e)}")
-
+        raise HTTPException(status_code=500, detail={
+            "detail": f"Unexpected error during EMI payment: {str(e)}",
+            "code": "internal_server_error"
+        })
 
 # ------------------------- SIMULATE REPAYMENT (ADMIN TRIGGERED) -------------------------
 
