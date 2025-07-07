@@ -65,6 +65,7 @@ def list_loans(
     loans = crud_loan.get_loans(db)
     return [schemas.LoanResponse.from_orm(loan) for loan in loans]
 
+
 @router.patch("/{loan_id}", response_model=schemas.LoanResponse)
 def update_loan_status(
     loan_id: int,
