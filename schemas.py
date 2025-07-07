@@ -26,6 +26,11 @@ class LoanSubStatus(str, Enum):
     waiting_reinitiation = "waiting_reinitiation"
     overdue = "overdue"
     partially_paid = "partially_paid"
+    borrower_pending_signature = "borrower_pending_signature"
+    lender_pending_signature = "lender_pending_signature"
+    fully_signed = "fully_signed"
+    signature_failed = "signature_failed"
+
 
 class PaymentFrequency(str, Enum):
     every_10_seconds = "every_10_seconds"
@@ -69,6 +74,24 @@ class NotificationChannel(str, Enum):
     PUSH = "push"
     IN_APP = "in_app"
 
+class LoanOut(BaseModel):
+    id: int
+    lender_id: int
+    borrower_id: int
+    principal_amount: Decimal
+    interest_rate: Decimal
+    payment_frequency: PaymentFrequency
+    number_of_payments: int
+    status: LoanStatus
+    sub_status: Optional[LoanSubStatus] = None
+    created_at: Optional[datetime] = None
+    lender_name: Optional[str] = None  # set manually in route
+    lender_name: Optional[str] = None
+    lender_email: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+    
 # ==== VALIDATORS ====
 
 UPI_REGEX = r'^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{3,}$'
@@ -127,7 +150,6 @@ class UserLogin(BaseModel):
 
 class LoanBase(BaseModel):
     lender_id: int
-    borrower_id: int
     principal_amount: Decimal = Field(..., gt=0)
     interest_rate: Decimal = Field(default=0, ge=0, le=100)
     payment_frequency: PaymentFrequency = PaymentFrequency.monthly
@@ -226,6 +248,8 @@ class BorrowerDashboard(BaseModel):
     total_repaid: Decimal
     next_payment_due: Optional[PaymentResponse]
     wallet_balance: Decimal 
+    pending_signatures: Optional[List[LoanOut]] = []
+
 
 class LenderDashboard(BaseModel):
     active_loans: List[LoanResponse]

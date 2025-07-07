@@ -122,9 +122,11 @@ class LoanSubStatus(str, enum.Enum):
     waiting_reinitiation = "waiting_reinitiation"
     overdue = "overdue"
     partially_paid = "partially_paid"
-    pending_signature = "pending_signature"  # ← add this
-    fully_signed = "fully_signed"          
-    signature_failed = "signature_failed" 
+    borrower_pending_signature = "borrower_pending_signature"
+    lender_pending_signature = "lender_pending_signature"
+    fully_signed = "fully_signed"
+    signature_failed = "signature_failed"
+
 
 class PaymentFrequency(str, enum.Enum):
     every_10_seconds = "every_10_seconds"

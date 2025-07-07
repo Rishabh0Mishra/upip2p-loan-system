@@ -211,6 +211,11 @@ class DualSigningService:
                     }
                 )
                 
+                # Update loan sub_status to borrower_pending_signature
+                loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                if loan:
+                    loan.sub_status = LoanSubStatus.borrower_pending_signature
+                
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing initiation")
                     return False, "Failed to save borrower signing request", None
@@ -285,6 +290,11 @@ class DualSigningService:
                         }
                     )
 
+                    # Update loan sub_status to lender_pending_signature
+                    loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                    if loan:
+                        loan.sub_status = LoanSubStatus.lender_pending_signature
+
                     # --- Initiate lender signing ---
                     lender_success, lender_message = self._initiate_lender_signing(dual_request)
                     if not lender_success:
@@ -319,6 +329,11 @@ class DualSigningService:
                         "error_message": f"Borrower signing failed: {callback.error_message}"
                     }
                 )
+
+                # Update loan sub_status to waiting_reinitiation
+                loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                if loan:
+                    loan.sub_status = LoanSubStatus.waiting_reinitiation
 
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing failure")
@@ -529,6 +544,11 @@ class DualSigningService:
                     }
                 )
                 
+                # Update loan sub_status to waiting_reinitiation
+                loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                if loan:
+                    loan.sub_status = LoanSubStatus.waiting_reinitiation
+                
                 # FIXED: Safe commit with rollback handling
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit lender signing failure")
@@ -601,6 +621,12 @@ class DualSigningService:
                             "status": DualSigningStatus.PENDING_BORROWER
                         }
                     )
+                    
+                    # Update loan sub_status to borrower_pending_signature
+                    loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                    if loan:
+                        loan.sub_status = LoanSubStatus.borrower_pending_signature
+                        
                 # FIXED: Safe commit with rollback handling
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower retry")
@@ -609,6 +635,12 @@ class DualSigningService:
 
             elif dual_request.status == DualSigningStatus.BORROWER_SIGNED:
                 success, message = self._initiate_lender_signing(dual_request)
+                
+                # Update loan sub_status to lender_pending_signature
+                loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                if loan:
+                    loan.sub_status = LoanSubStatus.lender_pending_signature
+                    
                 # FIXED: Safe commit with rollback handling
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit lender retry")
@@ -632,28 +664,34 @@ class DualSigningService:
             if not dual_request:
                 logger.warning(f"[LOAN_ID:{loan_id}] Dual signing request not found for cancellation")
                 return False, "Dual signing request not found"
-            
+        
             if dual_request.status == DualSigningStatus.FULLY_SIGNED:
                 logger.warning(f"[LOAN_ID:{loan_id}] Cannot cancel completed signing")
                 return False, "Cannot cancel completed signing"
-            
+        
+        # Mark dual signing as failed
             crud.update_dual_request(
                 self.db,
                 loan_id,
-                {
-                    "status": DualSigningStatus.FAILED,
-                    "error_message": f"Cancelled: {reason}"
+        {
+                "status": DualSigningStatus.FAILED,
+                "error_message": f"Cancelled: {reason}"
                 }
             )
-            
-            # FIXED: Safe commit with rollback handling
+
+        # Also update the loan's sub_status to indicate it's waiting for reinitiation
+            loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+            if loan:
+                loan.sub_status = LoanSubStatus.waiting_reinitiation
+
+        # Safe commit
             if not self._safe_commit(loan_id):
                 logger.error(f"[LOAN_ID:{loan_id}] Failed to commit cancellation")
                 return False, "Failed to save cancellation"
-            
+        
             logger.info(f"[LOAN_ID:{loan_id}] Dual signing cancelled: {reason}")
             return True, "Dual signing cancelled successfully"
-            
+        
         except Exception as e:
             logger.error(f"[LOAN_ID:{loan_id}] Error cancelling dual signing: {str(e)}")
             try:
@@ -661,6 +699,7 @@ class DualSigningService:
             except Exception as rollback_error:
                 logger.error(f"[LOAN_ID:{loan_id}] Error during rollback: {str(rollback_error)}")
             return False, f"Error cancelling dual signing: {str(e)}"
+
 
     def cleanup_expired_requests(self) -> int:
         """Clean up expired signing requests"""

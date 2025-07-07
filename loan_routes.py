@@ -21,7 +21,6 @@ router = APIRouter(prefix="/loans", tags=["loans"])
 
 
 # ------------------------- LOAN CREATION -------------------------
-
 @router.post("/", response_model=schemas.LoanResponse)
 def create_loan(
     loan: schemas.LoanCreate,
@@ -35,7 +34,7 @@ def create_loan(
         raise HTTPException(status_code=403, detail="Lender ID mismatch")
 
     try:
-        db_loan = crud_loan.create_loan(db, loan)
+        db_loan = crud_loan.create_loan(db=db, loan=loan, current_user=current_user)
         db.commit()
         db.refresh(db_loan)
 
@@ -52,7 +51,6 @@ def create_loan(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Loan creation failed: {str(e)}")
-
 
 
 # ------------------------- LIST LOANS -------------------------
@@ -111,6 +109,25 @@ def update_loan_status(
             # 🔔 Send appropriate notifications
             if loan_update.status == "approved":
                 NotificationService(db).send_loan_approved_notification(loan)
+
+                # 🔐 Initiate dual NSDL eSign flow after approval
+                try:
+                    success, msg, signing_url = crud_loan.initiate_dual_signing_for_loan(db, loan)
+                    if not success:
+                        raise HTTPException(status_code=500, detail=f"Dual signing initiation failed: {msg}")
+
+                    loan.sub_status = models.LoanSubStatus.borrower_pending_signature
+                    log_action(
+                        db=db,
+                        user_id=loan.borrower_id,
+                        action=AuditAction.DOCUMENT_GENERATED,
+                        loan_id=loan.id,
+                        description=f"eSign initiated for borrower on Loan #{loan.id}"
+                    )
+                except Exception as e:
+                    db.rollback()
+                    raise HTTPException(status_code=500, detail=f"Failed to initiate signing: {str(e)}")
+
             elif loan_update.status == "rejected":
                 NotificationService(db).send_loan_rejected_notification(loan)
 
@@ -119,7 +136,7 @@ def update_loan_status(
                 db.commit()
                 db.refresh(loan)
 
-        # 🧾 Create EMI schedule only once
+        # 🧾 Create EMI schedule only once (on activation)
         if loan.status == "active":
             existing_payments = db.query(models.Payment).filter(models.Payment.loan_id == loan.id).count()
             if existing_payments == 0:
@@ -155,6 +172,7 @@ def update_loan_status(
                     )
                     db.add(payment)
 
+        # 🔄 Optional substatus update (if explicitly sent)
         if loan_update.sub_status is not None:
             loan = crud_loan.update_loan_sub_status(db, loan_id, loan_update.sub_status)
 
@@ -165,6 +183,7 @@ def update_loan_status(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Loan update failed: {str(e)}")
+
 
 
 # ------------------------- SEARCH LOANS -------------------------

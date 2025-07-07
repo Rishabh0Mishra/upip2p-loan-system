@@ -47,6 +47,23 @@ def lender_dashboard(
         2
     ) if total_loans > 0 else 0
 
+    # 💡 Dual signing required loans
+    dual_signing_loans = [
+        {
+            "id": loan.id,
+            "borrower_name": loan.borrower.name,
+            "amount": loan.principal_amount,
+            "reason": loan.description,
+            "payment_frequency": loan.payment_frequency,
+            "number_of_payments": loan.number_of_payments,
+            "sub_status": loan.sub_status,
+            "status": loan.status,
+            "created_at": loan.created_at
+        }
+        for loan in loans
+        if loan.sub_status == LoanSubStatus.lender_pending_signature
+    ]
+
     return {
         "total_loans": total_loans,
         "total_disbursed": float(total_disbursed),
@@ -54,7 +71,8 @@ def lender_dashboard(
         "pending_loans": pending_loans,
         "completed_loans": completed_loans,
         "cancelled_loans": cancelled_loans,
-        "average_interest_rate": avg_interest
+        "average_interest_rate": avg_interest,
+        "dual_signing_required": dual_signing_loans  # 👈 Frontend can now show these
     }
 
 
@@ -127,7 +145,7 @@ def accept_loan_request(
         loan.total_amount = total_amount.quantize(Decimal("0.01"))
         loan.payment_amount = payment_amount.quantize(Decimal("0.01"))
         loan.status = LoanStatus.accepted
-        loan.sub_status = LoanSubStatus.pending_signature
+        loan.sub_status = LoanSubStatus.borrower_pending_signature
         db.commit()
         db.refresh(loan)
 
@@ -165,6 +183,7 @@ def accept_loan_request(
 
         if not success:
             loan.sub_status = LoanSubStatus.signature_failed
+
             db.commit()
             db.refresh(loan)
             raise HTTPException(status_code=500, detail=f"Signing failed: {message}")

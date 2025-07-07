@@ -22,7 +22,6 @@ from document_generator import DocumentGenerator
 from dual_signing_crud import get_dual_request, update_dual_request
 from dual_signing.dual_signing_models import DualSigningStatus
 
-
 IST = pytz.timezone("Asia/Kolkata")
 logger = logging.getLogger(__name__)
 
@@ -50,14 +49,11 @@ def validate_loan_data(loan: schemas.LoanCreate):
         )
 
 
-def validate_users_exist(db: Session, lender_id: int, borrower_id: int):
+def validate_lender_exists(db: Session, lender_id: int):
     lender = db.query(models.User).filter(models.User.id == lender_id).first()
-    borrower = db.query(models.User).filter(models.User.id == borrower_id).first()
     if not lender:
         raise HTTPException(status_code=404, detail="Lender not found")
-    if not borrower:
-        raise HTTPException(status_code=404, detail="Borrower not found")
-    return lender, borrower
+    return lender
 
 
 def get_wallet(db: Session, user_id: int):
@@ -75,12 +71,40 @@ def get_wallet(db: Session, user_id: int):
 
 
 
-def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = "http://localhost:8000"):
+def create_loan(
+    db: Session,
+    loan: schemas.LoanCreate,
+    current_user: models.User,
+    callback_base_url: str = "http://localhost:8000"
+):
     """
-    Create a loan without initiating dual signing. Signing happens after lender approval.
+    Create a loan without initiating dual signing. Borrower ID is inferred from current_user.
     """
-    validate_loan_data(loan)
-    lender, borrower = validate_users_exist(db, loan.lender_id, loan.borrower_id)
+    # Validate without borrower_id
+    if loan.principal_amount < settings.min_loan_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Loan amount must be at least ₹{settings.min_loan_amount}"
+        )
+    if loan.principal_amount > settings.max_loan_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Loan amount cannot exceed ₹{settings.max_loan_amount}"
+        )
+    if loan.lender_id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot create a loan to yourself"
+        )
+    if not (0 <= loan.interest_rate <= 0.5):
+        raise HTTPException(
+            status_code=400,
+            detail="Interest rate must be between 0% and 50%"
+        )
+
+    lender = db.query(models.User).filter(models.User.id == loan.lender_id).first()
+    if not lender:
+        raise HTTPException(status_code=404, detail="Lender not found")
 
     freq_delta = {
         "every_10_seconds": timedelta(seconds=10),
@@ -102,7 +126,7 @@ def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = 
     try:
         db_loan = models.Loan(
             lender_id=loan.lender_id,
-            borrower_id=loan.borrower_id,
+            borrower_id=current_user.id,
             principal_amount=Decimal(str(loan.principal_amount)),
             interest_rate=Decimal(str(loan.interest_rate)),
             payment_frequency=loan.payment_frequency,
@@ -111,7 +135,7 @@ def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = 
             start_date=start_date,
             due_date=due_date,
             status=models.LoanStatus.pending,
-            sub_status=models.LoanSubStatus.none  # don't jump ahead to signing
+            sub_status=models.LoanSubStatus.none
         )
         db.add(db_loan)
         db.commit()
@@ -122,17 +146,16 @@ def create_loan(db: Session, loan: schemas.LoanCreate, callback_base_url: str = 
 
     log_action(
         db=db,
-        user_id=loan.borrower_id,
+        user_id=current_user.id,
         action=AuditAction.LOAN_CREATED,
         description=f"Loan request #{db_loan.id} created by borrower",
         loan_id=db_loan.id
     )
 
     invalidate_cache(f"get_loans_by_user:{loan.lender_id}")
-    invalidate_cache(f"get_loans_by_user:{loan.borrower_id}")
+    invalidate_cache(f"get_loans_by_user:{current_user.id}")
 
     return db_loan
-
 
 
 def initiate_dual_signing_for_loan(db: Session, loan: models.Loan, callback_base_url: str = "http://localhost:8000"):
