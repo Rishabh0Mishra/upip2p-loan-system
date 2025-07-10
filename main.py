@@ -28,6 +28,8 @@ from websocket_manager import manager
 from email_utils import send_email
 from logging_config import StructuredLogger
 from emi_worker import run_worker
+from fastapi.staticfiles import StaticFiles
+from upload_routes import router as upload_router
 
 
 app = FastAPI()
@@ -289,6 +291,8 @@ def clear_dual_signing_cache_on_reload():
     dual_signing_store._signing_requests.clear()
     print("🧹 Dual signing cache cleared on startup")
         
+app.mount("/uploaded_docs", StaticFiles(directory="uploaded_docs"), name="uploaded_docs")
+         
 
 # Routers
 app.include_router(admin_router)
@@ -302,3 +306,4 @@ app.include_router(document_router)
 app.include_router(repayment_router)
 app.include_router(wallet_router)
 app.include_router(dual_signing_router)
+app.include_router(upload_router)

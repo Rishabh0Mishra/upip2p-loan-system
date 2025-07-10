@@ -1,4 +1,5 @@
 import uuid
+import os
 import logging
 from datetime import datetime
 from typing import Dict, Any, Tuple, Optional, List
@@ -42,6 +43,47 @@ class DualSigningService:
             log_prefix = f"[LOAN_ID:{loan_id}] " if loan_id else ""
             logger.error(f"{log_prefix}Commit failed: {commit_err}")
             return False
+
+    def _resolve_document_path(self, document_path: str) -> Optional[str]:
+        """
+        Resolve document path by checking multiple possible locations.
+        Accepts both absolute paths and static-like relative paths.
+        """
+        if not document_path:
+            return None
+            
+        # Path candidates to check
+        candidates = []
+        
+        # 1. Use the path as-is (absolute path)
+        candidates.append(document_path)
+        
+        # 2. If it's a relative path, try common base directories
+        if not os.path.isabs(document_path):
+            # Try with uploaded_docs/public_docs prefix
+            candidates.append(os.path.join("uploaded_docs", "public_docs", document_path))
+            
+            # Try with just the filename in uploaded_docs/public_docs
+            candidates.append(os.path.join("uploaded_docs", "public_docs", os.path.basename(document_path)))
+        else:
+            # For absolute paths, also try the filename in uploaded_docs/public_docs
+            candidates.append(os.path.join("uploaded_docs", "public_docs", os.path.basename(document_path)))
+        
+        # 3. Try static directory (common for web applications)
+        candidates.append(os.path.join("static", os.path.basename(document_path)))
+        
+        # 4. Try current directory with just filename
+        candidates.append(os.path.basename(document_path))
+        
+        # Check each candidate and return the first one that exists
+        for candidate in candidates:
+            if os.path.exists(candidate) and os.path.isfile(candidate):
+                logger.info(f"Document resolved to: {candidate}")
+                return candidate
+        
+        # Log all attempted paths for debugging
+        logger.error(f"Document not found in any of these locations: {candidates}")
+        return None
 
     def create_and_initiate_dual_signing(self, loan_data: Dict[str, Any],
                                          callback_base_url: str = "http://localhost:8000") -> Tuple[bool, str, Optional[str]]:
@@ -248,11 +290,11 @@ class DualSigningService:
         """Handle callback from borrower signing completion"""
         signing_request = None
         loan_id = None
-        
+
         try:
             callback = SigningCallbackData(**callback_data)
 
-            # Find signing request
+            # Get signing request from DB
             signing_request = crud.get_signing_request(self.db, callback.request_id)
             if not signing_request:
                 logger.error(f"[REQUEST_ID:{callback.request_id}] Signing request not found")
@@ -261,23 +303,32 @@ class DualSigningService:
             loan_id = signing_request.loan_id
             logger.info(f"[LOAN_ID:{loan_id}] Processing borrower signing callback")
 
-            # Verify this is a borrower signing request
             if signing_request.signer_role != SignerRole.BORROWER:
-                logger.error(f"[LOAN_ID:{loan_id}] Invalid signer role for borrower callback: {signing_request.signer_role}")
+                logger.error(f"[LOAN_ID:{loan_id}] Invalid signer role for borrower callback")
                 return False, "Invalid signer role for borrower callback"
 
             if callback.is_successful():
-                # --- Update signing request ---
+                # ✅ Patch begins here: normalize the path
+                signed_url = callback.signed_document_url
+                if signed_url.startswith("/"):
+                    signed_url = signed_url.lstrip("/")
+                resolved_path = signed_url if os.path.exists(signed_url) else None
+                # ✅ Patch ends here
+
+                if not resolved_path:
+                    logger.error(f"[LOAN_ID:{loan_id}] Signed document not found at any expected location")
+                    return False, "Signed document file does not exist in expected locations"
+
+                # Update signed request
                 crud.update_signing_request(
                     self.db,
                     callback.request_id,
                     {
                         "status": SigningRequestStatus.SIGNED,
-                        "signed_document_url": callback.signed_document_url
+                        "signed_document_url": resolved_path
                     }
                 )
 
-                # --- Update dual signing request ---
                 dual_request = crud.get_dual_request(self.db, signing_request.loan_id)
                 if dual_request:
                     crud.update_dual_request(
@@ -286,16 +337,14 @@ class DualSigningService:
                         {
                             "status": DualSigningStatus.BORROWER_SIGNED,
                             "borrower_signed_at": datetime.utcnow(),
-                            "borrower_signed_doc_url": callback.signed_document_url
+                            "borrower_signed_doc_url": resolved_path
                         }
                     )
 
-                    # Update loan sub_status to lender_pending_signature
                     loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
                     if loan:
                         loan.sub_status = LoanSubStatus.lender_pending_signature
 
-                    # --- Initiate lender signing ---
                     lender_success, lender_message = self._initiate_lender_signing(dual_request)
                     if not lender_success:
                         logger.error(f"[LOAN_ID:{loan_id}] Failed to initiate lender signing: {lender_message}")
@@ -303,14 +352,13 @@ class DualSigningService:
                         return False, lender_message
 
                 if not self._safe_commit(loan_id):
-                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing completion")
+                    logger.error(f"[LOAN_ID:{loan_id}] Commit failed after borrower signing")
                     return False, "Failed to save borrower signing completion"
-                
+
                 logger.info(f"[LOAN_ID:{loan_id}] Borrower signing completed successfully")
                 return True, "Borrower signing completed successfully"
 
             else:
-                # --- Handle failed signing ---
                 logger.error(f"[LOAN_ID:{loan_id}] Borrower signing failed: {callback.error_message}")
                 crud.update_signing_request(
                     self.db,
@@ -320,7 +368,6 @@ class DualSigningService:
                         "error_message": callback.error_message
                     }
                 )
-
                 crud.update_dual_request(
                     self.db,
                     signing_request.loan_id,
@@ -330,15 +377,14 @@ class DualSigningService:
                     }
                 )
 
-                # Update loan sub_status to waiting_reinitiation
                 loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
                 if loan:
                     loan.sub_status = LoanSubStatus.waiting_reinitiation
 
                 if not self._safe_commit(loan_id):
-                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower signing failure")
+                    logger.error(f"[LOAN_ID:{loan_id}] Commit failed for borrower signing failure")
                     return False, "Failed to save borrower signing failure"
-                
+
                 return False, f"Borrower signing failed: {callback.error_message}"
 
         except Exception as e:
@@ -346,7 +392,7 @@ class DualSigningService:
             try:
                 self.db.rollback()
             except Exception as rollback_error:
-                logger.error(f"Error during rollback: {str(rollback_error)}")
+                logger.error(f"Rollback failed: {str(rollback_error)}")
             return False, f"Error processing borrower signing callback: {str(e)}"
 
     def _initiate_lender_signing(self, dual_request: DualSigningRequest) -> Tuple[bool, str]:
@@ -354,14 +400,16 @@ class DualSigningService:
         loan_id = dual_request.loan_id
         try:
             lender_request_id = str(uuid.uuid4())
-            callback_url = f"http://localhost:8000/dual-signing/callback/lender"  # Configurable if needed
-            
-            # Use borrower-signed document for lender signing
-            document_url = dual_request.borrower_signed_doc_url or dual_request.document_url
-            
-            logger.info(f"[LOAN_ID:{loan_id}] Initiating lender signing with request_id: {lender_request_id}")
-            
-            # Create lender signing request
+            callback_url = "http://localhost:8000/dual-signing/callback/lender"
+
+            # Use the enhanced path resolution for lender signing
+            primary_path = dual_request.borrower_signed_doc_url or dual_request.document_url
+            document_url = self._resolve_document_path(primary_path)
+
+            if not document_url:
+                logger.error(f"[LOAN_ID:{loan_id}] Signed document not found for lender signing.")
+                return False, "Signed document not found for lender"
+
             lender_signing_request = SigningRequest(
                 request_id=lender_request_id,
                 signer_name=dual_request.lender_name,
@@ -370,12 +418,10 @@ class DualSigningService:
                 document_url=document_url,
                 callback_url=callback_url,
                 signer_role=SignerRole.LENDER,
-                loan_id=dual_request.loan_id
+                loan_id=loan_id
             )
-            
             crud.create_signing_request(self.db, lender_signing_request)
 
-            # Call NSDL to initiate lender signing
             success, nsdl_response = self.nsdl_client.initiate_signing(
                 request_id=lender_request_id,
                 signer_name=dual_request.lender_name,
@@ -386,7 +432,6 @@ class DualSigningService:
             )
 
             if success:
-                # Update signing request
                 crud.update_signing_request(
                     self.db,
                     lender_request_id,
@@ -395,23 +440,18 @@ class DualSigningService:
                         "nsdl_request_id": nsdl_response.request_id
                     }
                 )
-                
-                # Update dual request
                 crud.update_dual_request(
                     self.db,
-                    dual_request.loan_id,
+                    loan_id,
                     {
                         "status": DualSigningStatus.PENDING_LENDER,
                         "lender_signing_request_id": lender_request_id
                     }
                 )
-                
-                # Optional: Notify lender with signing URL
-                logger.info(f"[LOAN_ID:{loan_id}] Lender signing URL: {nsdl_response.signing_url}")
-                
+                logger.info(f"[LOAN_ID:{loan_id}] Lender signing successfully initiated")
                 return True, "Lender signing initiated successfully"
+
             else:
-                logger.error(f"[LOAN_ID:{loan_id}] NSDL failed to initiate lender signing: {nsdl_response.error_message}")
                 crud.update_signing_request(
                     self.db,
                     lender_request_id,
@@ -420,20 +460,18 @@ class DualSigningService:
                         "error_message": nsdl_response.error_message
                     }
                 )
-                
                 crud.update_dual_request(
                     self.db,
-                    dual_request.loan_id,
+                    loan_id,
                     {
                         "status": DualSigningStatus.FAILED,
-                        "error_message": f"Failed to initiate lender signing: {nsdl_response.error_message}"
+                        "error_message": f"NSDL failed: {nsdl_response.error_message}"
                     }
                 )
-                
-                return False, f"Failed to initiate lender signing: {nsdl_response.error_message}"
+                return False, f"NSDL failed to initiate signing: {nsdl_response.error_message}"
 
         except Exception as e:
-            logger.error(f"[LOAN_ID:{loan_id}] Error initiating lender signing: {str(e)}")
+            logger.error(f"[LOAN_ID:{loan_id}] Exception during lender signing: {str(e)}")
             return False, f"Failed to initiate lender signing: {str(e)}"
 
     def handle_lender_signing_callback(self, callback_data: Dict[str, Any]) -> Tuple[bool, str]:
@@ -444,88 +482,87 @@ class DualSigningService:
         try:
             callback = SigningCallbackData(**callback_data)
 
-            # Find signing request
+            # Get signing request from DB
             signing_request = crud.get_signing_request(self.db, callback.request_id)
             if not signing_request:
                 logger.error(f"[REQUEST_ID:{callback.request_id}] Signing request not found")
                 return False, "Signing request not found"
-     
+
             loan_id = signing_request.loan_id
             logger.info(f"[LOAN_ID:{loan_id}] Processing lender signing callback")
 
-            # Verify this is a lender signing request
             if signing_request.signer_role != SignerRole.LENDER:
-                logger.error(f"[LOAN_ID:{loan_id}] Invalid signer role for lender callback: {signing_request.signer_role}")
+                logger.error(f"[LOAN_ID:{loan_id}] Invalid signer role for lender callback")
                 return False, "Invalid signer role for lender callback"
 
             if callback.is_successful():
-                # --- Update signing request ---
+                # Resolve lender's signed PDF path
+                resolved_path = self._resolve_document_path(callback.signed_document_url)
+                if not resolved_path:
+                    logger.error(f"[LOAN_ID:{loan_id}] Lender signed document not found")
+                    return False, "Lender signed document file does not exist in expected locations"
+
+                # Update lender signing request
                 crud.update_signing_request(
                     self.db,
                     callback.request_id,
                     {
                         "status": SigningRequestStatus.SIGNED,
-                        "signed_document_url": callback.signed_document_url
+                        "signed_document_url": resolved_path
                     }
                 )
 
-                # --- Fetch dual signing request ---
                 dual_request = crud.get_dual_request(self.db, loan_id)
-                if dual_request:
-                    merged_doc_url = None
+                if not dual_request or not dual_request.borrower_signed_doc_url:
+                    logger.error(f"[LOAN_ID:{loan_id}] Borrower document missing, cannot merge")
+                    return False, "Cannot merge without borrower signed document"
 
-                    # --- Check if borrower signed successfully ---
-                    borrower_signing_request = crud.get_borrower_signing_request(self.db, loan_id)
-                    if borrower_signing_request and borrower_signing_request.status == SigningRequestStatus.SIGNED:
-                        try:
-                            logger.info(f"[LOAN_ID:{loan_id}] Merging borrower and lender signed documents")
-                            merged_doc_url = self.pdf_merger.merge_signed_documents(
-                                borrower_signing_request.signed_document_url,
-                                callback.signed_document_url,
-                                loan_id
-                            )
-                        except Exception as merge_error:
-                            logger.error(f"[LOAN_ID:{loan_id}] Failed to merge documents: {merge_error}")
-                            # Still proceed with fallback
+                # Merge PDFs
+                from .pdf_merger import PDFMerger
+                merger = PDFMerger()
+                merged_path = merger.merge_signed_documents(
+                    borrower_signed_url=dual_request.borrower_signed_doc_url,
+                    lender_signed_url=resolved_path,
+                    loan_id=str(loan_id)
+                )
 
-                    # --- Update dual signing request ---
-                    crud.update_dual_request(
-                        self.db,
-                        loan_id,
-                        {
-                            "status": DualSigningStatus.FULLY_SIGNED,
-                            "lender_signed_at": datetime.utcnow(),
-                            "lender_signed_doc_url": callback.signed_document_url,
-                            "fully_signed_doc_url": merged_doc_url or callback.signed_document_url
-                        }
-                    )
+                if not merged_path:
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to merge signed documents")
+                    return False, "Failed to merge signed documents"
 
-                    # --- Update loan record ---
-                    loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
-                    if loan:
-                        loan.status = LoanStatus.active
-                        loan.sub_status = LoanSubStatus.fully_signed
-                        loan.signed_agreement_url = merged_doc_url or callback.signed_document_url
-                        logger.info(f"[LOAN_ID:{loan_id}] Loan status updated to active and fully_signed")
+                # Update dual signing request
+                crud.update_dual_request(
+                    self.db,
+                    loan_id,
+                    {
+                        "status": DualSigningStatus.FULLY_SIGNED,
+                        "lender_signed_at": datetime.utcnow(),
+                        "lender_signed_doc_url": resolved_path,
+                        "final_signed_doc_url": merged_path
+                    }
+                )
 
-                        # FIXED: Safe commit with rollback handling
-                        if not self._safe_commit(loan_id):
-                            logger.error(f"[LOAN_ID:{loan_id}] Failed to commit loan status update")
-                            return False, "Failed to update loan status in database"
-                        
-                        # Create EMI schedule after successful commit
-                        try:
-                            create_repayment_schedule(self.db, loan)
-                            logger.info(f"[LOAN_ID:{loan_id}] EMI schedule successfully created")
-                        except Exception as emi_err:
-                            logger.error(f"[LOAN_ID:{loan_id}] Failed to create EMI schedule: {emi_err}")
-                            # EMI schedule failure shouldn't rollback the loan signing completion
-                            
-                    logger.info(f"[LOAN_ID:{loan_id}] Lender signing completed successfully - agreement finalized")
-                    return True, "Lender signing completed successfully. Loan agreement is now fully signed."
+                # Mark loan as fully signed
+                loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                if loan:
+                    loan.status = LoanStatus.active
+                    loan.sub_status = LoanSubStatus.none
+
+                try:
+                    create_repayment_schedule(self.db, loan)  # 🔥 This generates EMI records
+                except Exception as emi_err:
+                    logger.error(f"[LOAN_ID:{loan_id}] Failed to generate EMI schedule: {str(emi_err)}")
+                    return False, "Loan activated, but EMI schedule generation failed"
+
+
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Commit failed after lender signing")
+                    return False, "Failed to save lender signing completion"
+
+                logger.info(f"[LOAN_ID:{loan_id}] Lender signing completed and documents merged")
+                return True, "Lender signing completed successfully - loan fully signed"
 
             else:
-                # Signing failed — update both signing and dual requests
                 logger.error(f"[LOAN_ID:{loan_id}] Lender signing failed: {callback.error_message}")
                 crud.update_signing_request(
                     self.db,
@@ -537,23 +574,21 @@ class DualSigningService:
                 )
                 crud.update_dual_request(
                     self.db,
-                    loan_id,
+                    signing_request.loan_id,
                     {
                         "status": DualSigningStatus.FAILED,
                         "error_message": f"Lender signing failed: {callback.error_message}"
                     }
                 )
-                
-                # Update loan sub_status to waiting_reinitiation
+
                 loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
                 if loan:
                     loan.sub_status = LoanSubStatus.waiting_reinitiation
-                
-                # FIXED: Safe commit with rollback handling
+
                 if not self._safe_commit(loan_id):
-                    logger.error(f"[LOAN_ID:{loan_id}] Failed to commit lender signing failure")
+                    logger.error(f"[LOAN_ID:{loan_id}] Commit failed for lender signing failure")
                     return False, "Failed to save lender signing failure"
-                
+
                 return False, f"Lender signing failed: {callback.error_message}"
 
         except Exception as e:
@@ -561,7 +596,7 @@ class DualSigningService:
             try:
                 self.db.rollback()
             except Exception as rollback_error:
-                logger.error(f"Error during rollback: {str(rollback_error)}")
+                logger.error(f"Rollback failed: {str(rollback_error)}")
             return False, f"Error processing lender signing callback: {str(e)}"
 
     def get_dual_signing_status(self, loan_id: str) -> Optional[Dict[str, Any]]:
@@ -627,7 +662,7 @@ class DualSigningService:
                     if loan:
                         loan.sub_status = LoanSubStatus.borrower_pending_signature
                         
-                # FIXED: Safe commit with rollback handling
+                # Safe commit with rollback handling
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit borrower retry")
                     return False, "Failed to save retry attempt"
@@ -641,7 +676,7 @@ class DualSigningService:
                 if loan:
                     loan.sub_status = LoanSubStatus.lender_pending_signature
                     
-                # FIXED: Safe commit with rollback handling
+                # Safe commit with rollback handling
                 if not self._safe_commit(loan_id):
                     logger.error(f"[LOAN_ID:{loan_id}] Failed to commit lender retry")
                     return False, "Failed to save retry attempt"
@@ -656,29 +691,6 @@ class DualSigningService:
             except Exception as rollback_error:
                 logger.error(f"[LOAN_ID:{loan_id}] Error during rollback: {str(rollback_error)}")
             return False, f"Error during retry: {str(e)}"
-
-    def cancel_dual_signing(self, loan_id: str, reason: str) -> Tuple[bool, str]:
-        """Cancel dual signing process"""
-        try:
-            dual_request = crud.get_dual_request(self.db, loan_id)
-            if not dual_request:
-                logger.warning(f"[LOAN_ID:{loan_id}] Dual signing request not found for cancellation")
-                return False, "Dual signing request not found"
-        
-            if dual_request.status == DualSigningStatus.FULLY_SIGNED:
-                logger.warning(f"[LOAN_ID:{loan_id}] Cannot cancel completed signing")
-                return False, "Cannot cancel completed signing"
-        
-        # Mark dual signing as failed
-            crud.update_dual_request(
-                self.db,
-                loan_id,
-        {
-                "status": DualSigningStatus.FAILED,
-                "error_message": f"Cancelled: {reason}"
-                }
-            )
-
         # Also update the loan's sub_status to indicate it's waiting for reinitiation
             loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
             if loan:
