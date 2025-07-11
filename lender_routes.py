@@ -19,7 +19,8 @@ from document_generator import DocumentGenerator
 from dual_signing_crud import get_dual_request, update_dual_request
 from dual_signing.dual_signing_models import DualSigningStatus
 from fastapi.requests import Request
-
+from typing import List
+from schemas import  LoanOut
 from document_generator import DocumentGenerator
 from dual_signing.dual_signing_service import get_dual_signing_service
 lender_router = APIRouter(prefix="/lender", tags=["lender"])
@@ -56,6 +57,7 @@ def lender_dashboard(
             "reason": loan.description,
             "payment_frequency": loan.payment_frequency,
             "number_of_payments": loan.number_of_payments,
+            "interest_rate": loan.interest_rate,
             "sub_status": loan.sub_status,
             "status": loan.status,
             "created_at": loan.created_at
@@ -63,6 +65,25 @@ def lender_dashboard(
         for loan in loans
         if loan.sub_status == LoanSubStatus.lender_pending_signature
     ]
+    # 🔧 Add lender-side pending signatures
+    pending_signatures = []
+    for loan in loans:
+         if loan.sub_status == LoanSubStatus.lender_pending_signature:
+            borrower = db.query(models.User).filter(models.User.id == loan.borrower_id).first()
+            pending_signatures.append({
+            "id": loan.id,
+            "borrower_name": borrower.name if borrower else "Unknown",
+            "borrower_email": borrower.email if borrower else None,
+            "amount": float(loan.principal_amount),
+            "interest_rate": loan.interest_rate,
+            "payment_frequency": loan.payment_frequency,
+            "number_of_payments": loan.number_of_payments,
+            "reason": loan.description,
+            "status": loan.status,
+            "sub_status": loan.sub_status,
+            "created_at": loan.created_at
+        })
+
 
     return {
         "total_loans": total_loans,
@@ -72,7 +93,10 @@ def lender_dashboard(
         "completed_loans": completed_loans,
         "cancelled_loans": cancelled_loans,
         "average_interest_rate": avg_interest,
-        "dual_signing_required": dual_signing_loans  # 👈 Frontend can now show these
+        "dual_signing_required": dual_signing_loans,
+        "pending_signature_count": len(pending_signatures),
+        "pending_signatures": pending_signatures,
+        "loans": dual_signing_loans
     }
 
 
@@ -294,3 +318,23 @@ def mark_loan_completed(
         "lender_wallet_balance": float(lender_wallet.balance),
         "borrower_wallet_balance": float(borrower_wallet.balance)
     }
+    
+@lender_router.get("/pending-signatures", response_model=List[LoanOut])
+def get_loans_awaiting_lender_signature(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles(["lender"]))
+):
+    loans = db.query(models.Loan).filter(
+        models.Loan.lender_id == current_user.id,
+        models.Loan.sub_status == LoanSubStatus.lender_pending_signature
+    ).all()
+
+    result = []
+    for loan in loans:
+        borrower = db.query(models.User).filter(models.User.id == loan.borrower_id).first()
+        loan_out = schemas.LoanOut.from_orm(loan)
+        loan_out.borrower_name = borrower.name if borrower else "Unknown"
+        result.append(loan_out)
+
+    return result
+    

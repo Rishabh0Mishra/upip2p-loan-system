@@ -45,45 +45,33 @@ class DualSigningService:
             return False
 
     def _resolve_document_path(self, document_path: str) -> Optional[str]:
-        """
-        Resolve document path by checking multiple possible locations.
-        Accepts both absolute paths and static-like relative paths.
-        """
         if not document_path:
             return None
-            
-        # Path candidates to check
-        candidates = []
-        
-        # 1. Use the path as-is (absolute path)
-        candidates.append(document_path)
-        
-        # 2. If it's a relative path, try common base directories
-        if not os.path.isabs(document_path):
-            # Try with uploaded_docs/public_docs prefix
-            candidates.append(os.path.join("uploaded_docs", "public_docs", document_path))
-            
-            # Try with just the filename in uploaded_docs/public_docs
-            candidates.append(os.path.join("uploaded_docs", "public_docs", os.path.basename(document_path)))
-        else:
-            # For absolute paths, also try the filename in uploaded_docs/public_docs
-            candidates.append(os.path.join("uploaded_docs", "public_docs", os.path.basename(document_path)))
-        
-        # 3. Try static directory (common for web applications)
-        candidates.append(os.path.join("static", os.path.basename(document_path)))
-        
-        # 4. Try current directory with just filename
-        candidates.append(os.path.basename(document_path))
-        
-        # Check each candidate and return the first one that exists
-        for candidate in candidates:
-            if os.path.exists(candidate) and os.path.isfile(candidate):
-                logger.info(f"Document resolved to: {candidate}")
+
+    # Absolute path and file exists? Done.
+        if os.path.isabs(document_path) and os.path.isfile(document_path):
+            logger.info(f"[PathResolver] Using absolute path: {document_path}")
+            return document_path
+
+    # Try known relative directories
+        base_dirs = [
+            os.path.join("uploaded_docs", "public_docs"),
+            "uploaded_docs/generated_docs",  # include this explicitly
+            "static",
+            ".",
+        ]
+
+        for base in base_dirs:
+            candidate = os.path.join(base, os.path.basename(document_path))
+            if os.path.isfile(candidate):
+                logger.info(f"[PathResolver] Resolved to: {candidate}")
                 return candidate
-        
-        # Log all attempted paths for debugging
-        logger.error(f"Document not found in any of these locations: {candidates}")
+
+    # Only fail after trying all
+        logger.error(f"[PathResolver] Failed to resolve any path for: {document_path}")
         return None
+
+
 
     def create_and_initiate_dual_signing(self, loan_data: Dict[str, Any],
                                          callback_base_url: str = "http://localhost:8000") -> Tuple[bool, str, Optional[str]]:
@@ -448,6 +436,17 @@ class DualSigningService:
                         "lender_signing_request_id": lender_request_id
                     }
                 )
+
+                
+                loan = self.db.query(Loan).filter(Loan.id == int(loan_id)).first()
+                if loan:
+                    loan.sub_status = LoanSubStatus.lender_pending_signature
+
+                
+                if not self._safe_commit(loan_id):
+                    logger.error(f"[LOAN_ID:{loan_id}] Commit failed after lender signing initiation")
+                    return False, "Lender signing initiation failed during commit"
+
                 logger.info(f"[LOAN_ID:{loan_id}] Lender signing successfully initiated")
                 return True, "Lender signing initiated successfully"
 
@@ -802,4 +801,3 @@ def get_dual_signing_service(db: Session) -> DualSigningService:
         pdf_merger=PDFMerger(),
         document_generator=DocumentGenerator()
     )
-    

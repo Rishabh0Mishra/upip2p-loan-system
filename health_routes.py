@@ -21,7 +21,10 @@ async def get_metrics():
     document_uploads = db.query(models.LoanDocument).count()
     uptime_seconds = int(time.time() - app_start_time)
 
-    # ✅ Calculate API traffic from Redis keys: traffic:YYYYMMDDHHMM
+    # ✅ Count of fully signed agreements
+    agreements_signed = db.query(models.Loan).filter(models.Loan.status == "completed").count()
+
+    # ✅ API traffic tracking (last 60 minutes)
     now = datetime.utcnow()
     traffic_last_hour = 0
     for i in range(60):
@@ -34,5 +37,7 @@ async def get_metrics():
         "total_loans": total_loans,
         "total_users": total_users,
         "document_uploads": document_uploads,
+        "agreements_signed": agreements_signed,
         "api_calls_last_hour": traffic_last_hour
     }
+
